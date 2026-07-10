@@ -3,6 +3,23 @@
 A local text-to-speech service. Kokoro runs the audio, Windows neural voices
 are the fallback, and a tiny LLM cleans up messy text before it's spoken.
 
+## Everything runs on CPU
+
+Verified, not assumed — the GPU stays completely idle (`nvidia-smi`: 0 compute
+processes, 1 MiB used) while all three models are loaded and serving.
+
+- **Kokoro** *cannot* reach the GPU: `ONNX_PROVIDER=CPUExecutionProvider`, and
+  the installed `onnxruntime` build ships no CUDA provider at all
+  (`get_available_providers()` → `['AzureExecutionProvider', 'CPUExecutionProvider']`).
+- **Both LLM roles** run inside Ollama, which *will* put a model on the GPU
+  unless told otherwise. Every Ollama call therefore sends `num_gpu: 0`, built
+  by the single `config.ollama_options()` helper so a new call site can't
+  silently forget it. Confirm with `curl $OLLAMA_URL/api/ps` → `size_vram: 0`
+  for every model.
+
+Set `OLLAMA_FORCE_CPU=0` to allow the LLM roles onto the GPU. Kokoro stays on
+CPU regardless (there's no CUDA provider to switch to).
+
 ## Three independent roles — don't confuse them
 
 There are up to three models in play, doing **completely different jobs**.
@@ -106,6 +123,7 @@ Server listens on `0.0.0.0:8880`. Config is grouped by role (see `config.py`):
 |---|---|---|
 | `TTS_PORT` | `8880` | Listen port |
 | `OLLAMA_URL` | `http://172.18.0.1:11434` | Ollama host (docker gateway). Used by roles 2 and 3 only. |
+| `OLLAMA_FORCE_CPU` | `1` | Sends `num_gpu: 0` on every Ollama call. `0` allows the GPU. |
 
 **Role 1 — TTS engine (no LLM)**
 
@@ -115,6 +133,7 @@ Server listens on `0.0.0.0:8880`. Config is grouped by role (see `config.py`):
 | `KOKORO_VOICE` | `af_heart` | Default Kokoro voice |
 | `TTS_VOICE` | `en-US-AriaNeural` | Default edge/Windows voice (used directly, or as fallback) |
 | `ONNX_PROVIDER` | `CPUExecutionProvider` | Forces Kokoro to run on CPU only |
+| `TTS_STREAM_DEFAULT` | `0` | `1` = stream by default on `/tts` and `/chat/speak`; per-request `stream` always wins |
 
 **Role 2 — normalization LLM (rewords, never generates)**
 
@@ -131,6 +150,8 @@ Server listens on `0.0.0.0:8880`. Config is grouped by role (see `config.py`):
 |---|---|---|
 | `CHAT_ENABLED` | `1` | `0` unmounts `/chat/speak` entirely; no chat model is loaded |
 | `CHAT_MODEL` | `llama3.2:3b` | The demo's text *writer*. Nothing to do with TTS or normalization. |
+| `CHAT_NUM_CTX` | `4096` | Chat writes prose, so it needs more context than the normalizer's 1024 |
+| `CHAT_KEEP_ALIVE` | `5m` | Demo model; not pinned resident forever the way the normalizers are |
 
 > `OLLAMA_MODEL` is still accepted as a legacy alias for `CHAT_MODEL` (it
 > shipped in the first release), but the name was misleading — it only ever
@@ -157,8 +178,8 @@ curl -X POST http://localhost:8880/tts \
 Fields: `text`, `engine` (`kokoro`|`edge`, default `kokoro`), `voice`,
 `speed` (kokoro), `rate`/`pitch` (edge, e.g. `"+10%"` / `"-5Hz"`), `normalize`
 (bool, default `true` — set `false` to skip the cleanup pipeline for
-already-clean text and shave off the regex pass), `stream` (bool, default
-`false` — see [Streaming](#streaming) below).
+already-clean text and shave off the regex pass), `stream` (bool; omit to use
+the server's `TTS_STREAM_DEFAULT` — see [Streaming](#streaming) below).
 
 Response headers: `X-TTS-Engine`, `X-Text-Normalized` (`true` if the LLM
 fallback stage fired), `X-Normalize-Model` (which model handled it, if any).
@@ -214,6 +235,19 @@ Response header is `X-Chat-Model` (was `X-Ollama-Model` before v3 — renamed
 because "Ollama model" was ambiguous between roles 2 and 3).
 
 ## Streaming
+
+Controlled per request, with a server-wide default:
+
+| `"stream"` in request | Result |
+|---|---|
+| `true` | stream, regardless of server default |
+| `false` | don't stream, regardless of server default |
+| omitted / `null` | use `TTS_STREAM_DEFAULT` (default `0` = off) |
+
+So `TTS_STREAM_DEFAULT=1 ./start.sh` makes streaming the default for `/tts`
+and `/chat/speak`, and any request can still opt out with `"stream": false`.
+`/v1/audio/speech` ignores all of this and never streams — it stays strictly
+OpenAI-shaped.
 
 Pass `"stream": true` to `/tts` or `/chat/speak` to get audio as it's
 produced instead of waiting for the whole thing (see `streaming.py`).
@@ -303,6 +337,10 @@ app.py         FastAPI app: /tts, /v1/audio/speech, /voices, /health, /normalize
   and are **not** committed — re-download them if the `models/` folder is missing.
 - `edge-tts` uses Microsoft's online neural TTS service, so it needs internet;
   Kokoro needs none. The LLM side (Ollama) is always local either way.
+- Ollama defaults to the GPU. Until `OLLAMA_FORCE_CPU` existed, the chat model
+  silently ran there (2.5GB VRAM) while Kokoro and the normalizers were on CPU
+  — `num_gpu: 0` was only being sent on the normalization calls. All Ollama
+  calls now go through `config.ollama_options()`, which always sets it.
 - If Kokoro fails to load (missing model files, etc.) or errors on a specific
   request, requests transparently fall back to the edge/Windows voice — check
   `X-TTS-Engine: edge-fallback` on the response, or `GET /health` →

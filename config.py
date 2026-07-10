@@ -29,6 +29,25 @@ TTS_PORT = int(os.getenv("TTS_PORT", "8880"))
 # completely separate - same server, different models, different purposes.
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 
+# CPU-only enforcement. This whole service is meant to stay off the GPU.
+#
+# Role 1 (Kokoro) can't reach the GPU at all: ONNX_PROVIDER pins it to
+# CPUExecutionProvider, and the installed onnxruntime build ships no CUDA
+# provider. Roles 2 and 3 run inside Ollama, which WILL happily put a model on
+# the GPU unless told otherwise - so every Ollama call must pass num_gpu: 0.
+# Import OLLAMA_CPU_OPTIONS rather than writing the dict inline, so a new call
+# site can't silently forget it and leak onto the GPU.
+OLLAMA_FORCE_CPU = os.getenv("OLLAMA_FORCE_CPU", "1") != "0"
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "1024"))
+
+
+def ollama_options(num_ctx: int | None = None) -> dict:
+    """Options block for any Ollama call. num_gpu: 0 keeps the model on CPU."""
+    opts: dict = {"num_ctx": num_ctx or OLLAMA_NUM_CTX}
+    if OLLAMA_FORCE_CPU:
+        opts["num_gpu"] = 0
+    return opts
+
 
 # --- ROLE 1: TTS engine (core; no LLM involved) ------------------------------
 
@@ -39,6 +58,11 @@ KOKORO_MODEL_PATH = os.getenv("KOKORO_MODEL_PATH", str(BASE_DIR / "models" / "ko
 KOKORO_VOICES_PATH = os.getenv("KOKORO_VOICES_PATH", str(BASE_DIR / "models" / "voices-v1.0.bin"))
 
 EDGE_VOICE = os.getenv("TTS_VOICE", "en-US-AriaNeural")
+
+# Server-wide default for streaming audio. A request's own "stream" field always
+# wins; this only decides what happens when the request doesn't say either way.
+# /v1/audio/speech ignores this - it stays strictly OpenAI-shaped (never streams).
+STREAM_DEFAULT = os.getenv("TTS_STREAM_DEFAULT", "0") != "0"
 
 
 # --- ROLE 2: normalization LLM (support; rewords, never generates) -----------
@@ -63,3 +87,8 @@ CHAT_ENABLED = os.getenv("CHAT_ENABLED", "1") != "0"
 # because it shipped in the first release, but it is *only* the chat model -
 # it has never had anything to do with TTS or with normalization.
 CHAT_MODEL = os.getenv("CHAT_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.2:3b"
+
+# The chat model writes prose, so it needs more context than the normalizer's
+# short single-sentence rewrites. Still CPU-only (see OLLAMA_FORCE_CPU above).
+CHAT_NUM_CTX = int(os.getenv("CHAT_NUM_CTX", "4096"))
+CHAT_KEEP_ALIVE = os.getenv("CHAT_KEEP_ALIVE", "5m")

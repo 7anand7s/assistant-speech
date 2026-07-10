@@ -56,7 +56,15 @@ def split_all_sentences(text: str) -> list[str]:
 
 async def stream_ollama_tokens(ollama_url: str, model: str, prompt: str, system: str | None = None):
     """Async-generator over raw text tokens from Ollama's streaming /api/generate (NDJSON)."""
-    payload = {"model": model, "prompt": prompt, "stream": True}
+    import config
+
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": True,
+        "keep_alive": config.CHAT_KEEP_ALIVE,
+        "options": config.ollama_options(config.CHAT_NUM_CTX),  # num_gpu: 0 -> CPU only
+    }
     if system:
         payload["system"] = system
     async with httpx.AsyncClient(timeout=None) as client:

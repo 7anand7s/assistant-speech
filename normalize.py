@@ -153,7 +153,7 @@ async def _call_ollama(model: str, text: str, timeout: float) -> str:
             "prompt": text,
             "stream": False,
             "keep_alive": config.NORM_KEEP_ALIVE,
-            "options": {"num_gpu": 0, "num_ctx": 1024},
+            "options": config.ollama_options(),  # num_gpu: 0 -> CPU only
         })
         r.raise_for_status()
         return r.json().get("response", "").strip()

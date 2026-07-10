@@ -42,7 +42,8 @@ class ChatSpeakRequest(BaseModel):
     voice: str | None = None
     system: str | None = None
     normalize: bool = True
-    stream: bool = False          # stream LLM tokens -> sentence chunks -> streamed audio
+    stream: bool | None = None    # stream LLM tokens -> sentence chunks -> streamed audio;
+                                  # None -> server default (TTS_STREAM_DEFAULT)
 
 
 async def _normalized_sentences(sentences_iter):
@@ -56,8 +57,9 @@ async def _normalized_sentences(sentences_iter):
 async def chat_speak(req: ChatSpeakRequest, json_out: bool = Query(False, alias="json")):
     """Demo endpoint: ask the chat LLM to write a reply, then speak it."""
     chat_model = req.model or config.CHAT_MODEL
+    want_stream = config.STREAM_DEFAULT if req.stream is None else req.stream
 
-    if req.stream:
+    if want_stream:
         token_iter = streaming.stream_ollama_tokens(config.OLLAMA_URL, chat_model, req.prompt, req.system)
         sentence_iter = streaming.sentences_from_token_stream(token_iter)
         sentences = _normalized_sentences(sentence_iter) if req.normalize else sentence_iter
@@ -67,7 +69,13 @@ async def chat_speak(req: ChatSpeakRequest, json_out: bool = Query(False, alias=
             "Content-Disposition": 'inline; filename="reply.mp3"',
         })
 
-    payload = {"model": chat_model, "prompt": req.prompt, "stream": False}
+    payload = {
+        "model": chat_model,
+        "prompt": req.prompt,
+        "stream": False,
+        "keep_alive": config.CHAT_KEEP_ALIVE,
+        "options": config.ollama_options(config.CHAT_NUM_CTX),  # num_gpu: 0 -> CPU only
+    }
     if req.system:
         payload["system"] = req.system
     try:

@@ -135,12 +135,12 @@ class TTSRequest(BaseModel):
     rate: str = "+0%"           # used by edge, e.g. "-10%", "+25%"
     pitch: str = "+0Hz"         # used by edge, e.g. "-5Hz", "+10Hz"
     normalize: bool = True      # run text-cleanup pipeline (regex + LLM fallback) first
-    stream: bool = False        # stream audio sentence-by-sentence
+    stream: bool | None = None  # stream audio sentence-by-sentence; None -> TTS_STREAM_DEFAULT
 
 
 @app.post("/tts")
 async def tts(req: TTSRequest):
-    if req.stream:
+    if config.STREAM_DEFAULT if req.stream is None else req.stream:
         sentence_iter = _iter(streaming.split_all_sentences(req.text))
         sentences = _normalized_sentences(sentence_iter) if req.normalize else sentence_iter
         gen, used = await engines.synthesize_stream(
