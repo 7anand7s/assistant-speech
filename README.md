@@ -20,6 +20,34 @@ processes, 1 MiB used) while all three models are loaded and serving.
 Set `OLLAMA_FORCE_CPU=0` to allow the LLM roles onto the GPU. Kokoro stays on
 CPU regardless (there's no CUDA provider to switch to).
 
+### Does this affect other things using the same Ollama host?
+
+**Different models: no, fully isolated.** Verified — while this service's
+models sit on CPU, another app loading e.g. `mistral:7b` gets the GPU as
+normal.
+
+**The same model: yes.** `num_gpu` is a *load-time* parameter, and Ollama keeps
+only **one instance** per model. If another app is using the same model this
+service is configured with, our `num_gpu: 0` call **evicts its GPU instance and
+reloads it on CPU**. Worse, a subsequent normal call from that app does *not*
+move it back — Ollama reuses the resident CPU instance.
+
+To get it back on the GPU, the CPU instance has to **unload first**:
+
+```bash
+curl $OLLAMA_URL/api/generate -d '{"model":"llama3.2:3b","keep_alive":0}'   # force unload
+# next normal call from any app now loads it on the GPU again
+```
+
+This is why `CHAT_KEEP_ALIVE` defaults to `5m` rather than `-1` — the demo chat
+model drops out of memory on its own after 5 minutes idle, so it stops
+squatting on a shared model in CPU mode. The two normalization models *are*
+pinned (`keep_alive: -1`), but `qwen2.5:1.5b` / `gemma3:1b` are unlikely to be
+shared with anything else.
+
+If you do share `CHAT_MODEL` with other workloads and don't want this, either
+set `OLLAMA_FORCE_CPU=0`, or point `CHAT_MODEL` at a model nothing else uses.
+
 ## Three independent roles — don't confuse them
 
 There are up to three models in play, doing **completely different jobs**.
@@ -123,7 +151,7 @@ Server listens on `0.0.0.0:8880`. Config is grouped by role (see `config.py`):
 |---|---|---|
 | `TTS_PORT` | `8880` | Listen port |
 | `OLLAMA_URL` | `http://172.18.0.1:11434` | Ollama host (docker gateway). Used by roles 2 and 3 only. |
-| `OLLAMA_FORCE_CPU` | `1` | Sends `num_gpu: 0` on every Ollama call. `0` allows the GPU. |
+| `OLLAMA_FORCE_CPU` | `1` | Sends `num_gpu: 0` on every Ollama call. `0` allows the GPU. Note: pins *shared* models to CPU for other apps too — see above. |
 
 **Role 1 — TTS engine (no LLM)**
 

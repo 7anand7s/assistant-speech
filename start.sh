@@ -14,6 +14,10 @@ export OLLAMA_URL="${OLLAMA_URL:-http://172.18.0.1:11434}"   # Ollama on the Unr
 
 # Keep the WHOLE service off the GPU. Ollama puts models on the GPU by default,
 # so every Ollama call (roles 2 and 3) sends num_gpu:0. Set 0 to allow GPU.
+#
+# Caveat: Ollama holds ONE instance per model, so this pins a model to CPU for
+# every other app using that same model, until it unloads. Different models are
+# unaffected. CHAT_KEEP_ALIVE=5m below limits how long the demo model squats.
 export OLLAMA_FORCE_CPU="${OLLAMA_FORCE_CPU:-1}"
 
 # --- ROLE 1: TTS engine - the core product. No LLM involved. ---------------

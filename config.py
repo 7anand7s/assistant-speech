@@ -35,8 +35,15 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 # CPUExecutionProvider, and the installed onnxruntime build ships no CUDA
 # provider. Roles 2 and 3 run inside Ollama, which WILL happily put a model on
 # the GPU unless told otherwise - so every Ollama call must pass num_gpu: 0.
-# Import OLLAMA_CPU_OPTIONS rather than writing the dict inline, so a new call
-# site can't silently forget it and leak onto the GPU.
+# Call ollama_options() rather than writing the dict inline, so a new call site
+# can't silently forget it and leak onto the GPU.
+#
+# Caveat: num_gpu is a LOAD-TIME parameter and Ollama keeps one instance per
+# model. Sending num_gpu:0 for a model another app is running on the GPU evicts
+# that instance and reloads it on CPU - and a later normal call won't move it
+# back until the CPU instance unloads. Different models are unaffected. This is
+# why CHAT_KEEP_ALIVE is 5m rather than -1: the demo model shouldn't squat on a
+# possibly-shared model in CPU mode indefinitely.
 OLLAMA_FORCE_CPU = os.getenv("OLLAMA_FORCE_CPU", "1") != "0"
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "1024"))
 
