@@ -7,15 +7,17 @@ services:
     environment:
       # Ollama runs on the Unraid host (its own container, port published on the host)
       - OLLAMA_URL=http://host.docker.internal:11434
-      # Deployed endpoint is TTS-only: /chat/speak stays unmounted, llama3.2:3b never loaded
+      # TTS + STT enabled; the chat demo (/chat/speak, llama3.2:3b) stays off
       - CHAT_ENABLED=0
+      - STT_ENABLED=1
       # Whole service stays off the GPU (see README - this is deliberate)
       - ONNX_PROVIDER=CPUExecutionProvider
       - OLLAMA_FORCE_CPU=1
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      # 330MB of Kokoro weights live in the repo's models/, not in the image
+      # Model weights (Kokoro ~330MB + Parakeet ~660MB) live in the repo's
+      # models/, not baked into the image
       - ./models:/app/models:ro
       # normalization audit log persists in the repo dir (gitignored)
       - ./flagged_log.jsonl:/app/flagged_log.jsonl
@@ -24,5 +26,6 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      # boot loads Kokoro + Parakeet + warms the normalizers, so give it room
+      start_period: 90s
     restart: unless-stopped

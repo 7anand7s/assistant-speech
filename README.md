@@ -1,16 +1,20 @@
-# Self-hosted Neural TTS
+# Self-hosted Neural Speech (TTS + STT)
 
-A local text-to-speech service. Kokoro runs the audio, Windows neural voices
-are the fallback, and a tiny LLM cleans up messy text before it's spoken.
+A local speech service. **Text-to-speech**: Kokoro runs the audio, Windows
+neural voices are the fallback, and a tiny LLM cleans up messy text before it's
+spoken. **Speech-to-text**: Parakeet TDT 0.6B v2 transcribes uploaded audio back
+to text. Both run on CPU, fully offline.
 
 ## Everything runs on CPU
 
-Verified, not assumed — the GPU stays completely idle (`nvidia-smi`: 0 compute
-processes, 1 MiB used) while all three models are loaded and serving.
+Verified, not assumed — running the STT engine added **0 MiB** of GPU use
+(measured identical `nvidia-smi` memory before/after, and the service's PID
+never appears in the GPU compute list) while all models are loaded and serving.
 
-- **Kokoro** *cannot* reach the GPU: `ONNX_PROVIDER=CPUExecutionProvider`, and
-  the installed `onnxruntime` build ships no CUDA provider at all
-  (`get_available_providers()` → `['AzureExecutionProvider', 'CPUExecutionProvider']`).
+- **Kokoro** (TTS) and **Parakeet** (STT) *cannot* reach the GPU: Kokoro is
+  pinned via `ONNX_PROVIDER=CPUExecutionProvider`, Parakeet runs through
+  sherpa-onnx which defaults to CPU, and neither installed build ships a CUDA
+  provider at all.
 - **Both LLM roles** run inside Ollama, which *will* put a model on the GPU
   unless told otherwise. Every Ollama call therefore sends `num_gpu: 0`, built
   by the single `config.ollama_options()` helper so a new call site can't
@@ -48,24 +52,27 @@ shared with anything else.
 If you do share `CHAT_MODEL` with other workloads and don't want this, either
 set `OLLAMA_FORCE_CPU=0`, or point `CHAT_MODEL` at a model nothing else uses.
 
-## Three independent roles — don't confuse them
+## Four independent roles — don't confuse them
 
-There are up to three models in play, doing **completely different jobs**.
+There are up to four models in play, doing **completely different jobs**.
 They are unrelated: changing one doesn't affect the others. `/health` reports
 each separately.
 
 | # | Role | Where | Default model | Job |
 |---|---|---|---|---|
-| 1 | **TTS engine** — *the actual product* | `engines.py` | Kokoro (ONNX) | Turns text into audio. **No LLM involved.** |
+| 1 | **TTS engine** — *core* | `engines.py` | Kokoro (ONNX) | Turns text into audio. **No LLM involved.** |
 | 2 | **Normalization LLM** — *support* | `normalize.py` | `qwen2.5:1.5b` → `gemma3:1b` | **Rewords** existing text so it reads cleanly aloud. Never generates content. |
-| 3 | **Chat LLM** — *demo only* | `chat.py` | `llama3.2:3b` | **Writes new text** from a prompt, purely so `/chat/speak` has something to speak. **Not part of the TTS pipeline.** |
+| 3 | **Chat LLM** — *demo only* | `chat.py` | `llama3.2:3b` | **Writes new text** from a prompt, purely so `/chat/speak` has something to speak. **Not part of the pipeline.** |
+| 4 | **STT engine** — *core* | `stt.py` | Parakeet TDT 0.6B v2 (ONNX) | Turns audio into text — the reverse of role 1. **No LLM involved.** |
 
 Roles 2 and 3 both talk to Ollama, but that's just shared transport — different
-models, opposite jobs. **If you already have text to speak, you only need role 1.**
+models, opposite jobs. Roles 1 and 4 are the core product (text↔audio) and need
+neither. **If you already have text to speak, you only need role 1; to
+transcribe, only role 4.**
 
-Proof they're separate: run `CHAT_ENABLED=0 ./start.sh` and `llama3.2:3b` is
-never loaded, `/chat/speak` returns 404, and `/tts`, `/v1/audio/speech`,
-`/voices` and `/normalize` all work exactly as before.
+Proof they're separate: `CHAT_ENABLED=0 ./start.sh` → `llama3.2:3b` never loads
+and `/chat/speak` 404s; `STT_ENABLED=0 ./start.sh` → Parakeet never loads and
+`/stt` 404s; either way every other endpoint works exactly as before.
 
 ## Role 1 — the TTS engine (core)
 
@@ -135,6 +142,16 @@ can hear the TTS engine without supplying your own text. It is not part of the
 TTS pipeline and not part of normalization. Turn it off with `CHAT_ENABLED=0`
 and nothing else changes.
 
+## Role 4 — the STT engine (core)
+
+The reverse of role 1: upload audio, get text back. **Parakeet TDT 0.6B v2**
+(English, int8 ONNX, ~660MB) runs on CPU via sherpa-onnx — it currently tops the
+Hugging Face Open ASR leaderboard among sub-1B models, and its token-and-duration
+transducer decoder is genuinely fast on CPU (measured **RTF ≈ 0.05–0.30** here,
+i.e. 3–20× faster than real-time). No LLM involved. Any input audio
+format/samplerate works — ffmpeg decodes it to the 16 kHz mono the model wants.
+English only; disable with `STT_ENABLED=0`.
+
 ## Run
 
 ```bash
@@ -184,6 +201,14 @@ Server listens on `0.0.0.0:8880`. Config is grouped by role (see `config.py`):
 > `OLLAMA_MODEL` is still accepted as a legacy alias for `CHAT_MODEL` (it
 > shipped in the first release), but the name was misleading — it only ever
 > set the chat model. Prefer `CHAT_MODEL`.
+
+**Role 4 — STT engine (no LLM)**
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `STT_ENABLED` | `1` | `0` unmounts `/stt` and `/v1/audio/transcriptions`; Parakeet never loads |
+| `STT_MODEL_DIR` | `models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8` | Path to the extracted Parakeet model dir |
+| `STT_NUM_THREADS` | `4` | CPU threads for transcription |
 
 ## Endpoints
 
@@ -338,31 +363,57 @@ curl -X POST http://localhost:8880/normalize -H "Content-Type: application/json"
 # -> {"raw": "...", "stage1_cleaned": "...", "flagged": true, "final": "...", "model_used": "qwen2.5:1.5b"}
 ```
 
+### `POST /stt` — transcribe audio to text (role 4)
+
+Upload an audio file (any format — wav, mp3, m4a, ogg, flac…), get English text
+back. Only mounted when `STT_ENABLED=1`.
+
+```bash
+curl -X POST http://localhost:8880/stt -F "file=@recording.mp3"
+# -> {"text": "...", "duration_seconds": 11.0, "language": "en", "model": "parakeet-tdt-0.6b-v2"}
+```
+
+### `POST /v1/audio/transcriptions` — OpenAI-compatible STT
+
+Drop-in for clients that speak the OpenAI transcription API (multipart form,
+not JSON). `model` is accepted and ignored; `response_format` is `json`
+(default) or `text`.
+
+```bash
+curl -X POST http://localhost:8880/v1/audio/transcriptions \
+  -F "file=@recording.wav" -F "model=whisper-1"
+# -> {"text": "..."}
+```
+
 ### `GET /health` — liveness + status of each role, reported separately
 
-Returns `tts_engine`, `normalization_llm` and `chat_llm` as three distinct
-objects, each with a plain-English `role` description, so it's always obvious
-which model is doing what.
+Returns `tts_engine`, `normalization_llm`, `chat_llm` and `stt_engine` as
+distinct objects, each with a plain-English `role` description, so it's always
+obvious which model is doing what.
 
 ## Repo layout
 
-The file structure mirrors the three roles:
+The file structure mirrors the four roles:
 
 ```
 config.py      all config, grouped by role, with each role's job documented
 engines.py     ROLE 1  TTS engines (Kokoro + edge-tts). No LLM anywhere in it.
 normalize.py   ROLE 2  normalization LLM — rewords text, never generates
 chat.py        ROLE 3  chat LLM demo — /chat/speak router; not mounted if CHAT_ENABLED=0
+stt.py         ROLE 4  STT engine (Parakeet) — /stt + /v1/audio/transcriptions; not mounted if STT_ENABLED=0
 streaming.py   shared  sentence chunking + gapless streaming MP3 encoder
 app.py         FastAPI app: /tts, /v1/audio/speech, /voices, /health, /normalize
 ```
 
 ## Notes
 
-- Kokoro model files (`models/kokoro-v1.0.onnx`, ~311MB, and
-  `models/voices-v1.0.bin`, ~27MB) are downloaded from the
-  [kokoro-onnx releases](https://github.com/thewh1teagle/kokoro-onnx/releases)
-  and are **not** committed — re-download them if the `models/` folder is missing.
+- Model weights live in `models/` and are **not** committed (too large for git).
+  Re-download if the folder is missing:
+  - **Kokoro (TTS):** `models/kokoro-v1.0.onnx` (~311MB) + `models/voices-v1.0.bin`
+    (~27MB) from the [kokoro-onnx releases](https://github.com/thewh1teagle/kokoro-onnx/releases).
+  - **Parakeet (STT):** `sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2`
+    (~482MB) from the [sherpa-onnx asr-models release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models),
+    extracted into `models/`.
 - `edge-tts` uses Microsoft's online neural TTS service, so it needs internet;
   Kokoro needs none. The LLM side (Ollama) is always local either way.
 - Ollama defaults to the GPU. Until `OLLAMA_FORCE_CPU` existed, the chat model

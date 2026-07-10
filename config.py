@@ -1,5 +1,5 @@
 """
-Central config, organised by the THREE INDEPENDENT MODEL ROLES in this service.
+Central config, organised by the FOUR INDEPENDENT MODEL ROLES in this service.
 They are unrelated to each other - changing one does not affect the others.
 
   1. TTS ENGINE (core)        - turns text into audio. Kokoro (local ONNX, CPU)
@@ -16,6 +16,11 @@ They are unrelated to each other - changing one does not affect the others.
                                 speak. NOT part of the TTS pipeline. Disable it
                                 (CHAT_ENABLED=0) and /tts, /v1/audio/speech and
                                 /normalize all still work exactly the same.
+
+  4. STT ENGINE (core)        - the reverse of role 1: turns audio into text.
+                                Parakeet TDT 0.6B v2 (local ONNX, int8, CPU,
+                                English). No LLM involved. Independent of the
+                                other three; disable with STT_ENABLED=0.
 """
 
 import os
@@ -99,3 +104,17 @@ CHAT_MODEL = os.getenv("CHAT_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.2:3
 # short single-sentence rewrites. Still CPU-only (see OLLAMA_FORCE_CPU above).
 CHAT_NUM_CTX = int(os.getenv("CHAT_NUM_CTX", "4096"))
 CHAT_KEEP_ALIVE = os.getenv("CHAT_KEEP_ALIVE", "5m")
+
+
+# --- ROLE 4: STT engine (core; audio -> text; no LLM involved) ---------------
+
+# Parakeet TDT 0.6B v2: English, int8 ONNX, CPU-only. Tops the HF Open ASR
+# leaderboard among sub-1B models, and its token-and-duration transducer decoder
+# is genuinely fast on CPU (measured RTF ~0.05-0.30 here). Runs via sherpa-onnx,
+# which is CPU by default - there's no GPU path to leak onto.
+STT_ENABLED = os.getenv("STT_ENABLED", "1") != "0"
+STT_MODEL_DIR = os.getenv(
+    "STT_MODEL_DIR",
+    str(BASE_DIR / "models" / "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"),
+)
+STT_NUM_THREADS = int(os.getenv("STT_NUM_THREADS", "4"))

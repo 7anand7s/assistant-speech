@@ -1,24 +1,29 @@
 """
-Self-hosted neural TTS service.
+Self-hosted neural speech service (TTS + STT).
 
-The service is built around THREE INDEPENDENT ROLES - see config.py for the
+The service is built around FOUR INDEPENDENT ROLES - see config.py for the
 full explanation. In short:
 
   1. TTS engine (core, no LLM)  -> engines.py   Kokoro (local, CPU) / edge-tts
   2. Normalization LLM (support) -> normalize.py  rewords text, never generates
   3. Chat LLM (demo, optional)   -> chat.py       generates text to demo the TTS
+  4. STT engine (core, no LLM)  -> stt.py        Parakeet (local, CPU) audio->text
 
 Roles 2 and 3 both happen to talk to Ollama, but they are unrelated: different
-models, different jobs. The core TTS product (role 1) needs neither of them.
+models, different jobs. Roles 1 and 4 are the core product (text<->audio) and
+need neither of them.
 
 Endpoints:
-  GET  /health              - liveness + status of each role, reported separately
-  GET  /voices?engine=...   - list voices for an engine (filter with &lang=en)
-  POST /tts                 - {"text": "..."} -> mp3          [core]
-  POST /v1/audio/speech     - OpenAI-compatible TTS           [core]
-  POST /normalize           - inspect the cleanup pipeline    [role 2, debug]
-  POST /chat/speak          - prompt -> LLM writes -> speak   [role 3, demo;
-                              only mounted when CHAT_ENABLED=1]
+  GET  /health                  - liveness + status of each role, reported separately
+  GET  /voices?engine=...       - list voices for an engine (filter with &lang=en)
+  POST /tts                     - {"text": "..."} -> mp3          [role 1]
+  POST /v1/audio/speech         - OpenAI-compatible TTS           [role 1]
+  POST /normalize               - inspect the cleanup pipeline    [role 2, debug]
+  POST /chat/speak              - prompt -> LLM writes -> speak   [role 3, demo;
+                                  only mounted when CHAT_ENABLED=1]
+  POST /stt                     - upload audio -> text            [role 4;
+  POST /v1/audio/transcriptions - OpenAI-compatible STT             only mounted
+                                                                    when STT_ENABLED=1]
 
 Streaming: pass "stream": true to /tts or /chat/speak to get audio streamed
 sentence-by-sentence as it's synthesized instead of waiting for the whole
@@ -43,11 +48,15 @@ import streaming
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("tts")
 
-app = FastAPI(title="Self-hosted neural TTS (Kokoro + Windows voices)", version="3.0.0")
+app = FastAPI(title="Self-hosted neural speech (TTS + STT)", version="4.0.0")
 
 if config.CHAT_ENABLED:
     import chat
     app.include_router(chat.router)
+
+if config.STT_ENABLED:
+    import stt
+    app.include_router(stt.router)
 
 
 async def _iter(items: list):
@@ -64,7 +73,7 @@ async def _normalized_sentences(sentences_iter):
 
 @app.get("/health")
 async def health():
-    """Status of each of the three roles, reported separately so it's obvious
+    """Status of each of the four roles, reported separately so it's obvious
     which model does what."""
     if not engines._kokoro_instance and not engines._kokoro_init_error:
         try:
@@ -72,6 +81,25 @@ async def health():
         except Exception:
             pass
     kokoro_ok, kokoro_err = engines.kokoro_status()
+
+    stt_block = {
+        "role": "turns audio into text (no LLM involved)",
+        "enabled": config.STT_ENABLED,
+    }
+    if config.STT_ENABLED:
+        import stt
+        if not stt._recognizer and not stt._init_error:
+            try:
+                await stt.get_recognizer()
+            except Exception:
+                pass
+        stt_ok, stt_err = stt.stt_status()
+        stt_block.update({
+            "model": "parakeet-tdt-0.6b-v2",
+            "available": stt_ok,
+            "error": stt_err if not stt_ok else None,
+        })
+
     return {
         "status": "ok",
         "tts_engine": {                       # role 1: the actual product
@@ -93,6 +121,7 @@ async def health():
             "enabled": config.CHAT_ENABLED,
             "model": config.CHAT_MODEL if config.CHAT_ENABLED else None,
         },
+        "stt_engine": stt_block,              # role 4: audio -> text
         "ollama_url": config.OLLAMA_URL,
     }
 
@@ -206,6 +235,12 @@ async def warm_up():
         pass  # already logged; requests will fall back to edge
     if config.NORM_ENABLED:
         await normalize.warm_up_models()
+    if config.STT_ENABLED:
+        import stt
+        try:
+            await stt.get_recognizer()  # load Parakeet at boot, not on first request
+        except Exception:
+            pass  # already logged; /stt will surface the error
 
 
 if __name__ == "__main__":

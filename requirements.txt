@@ -6,3 +6,5 @@ pydantic
 kokoro-onnx
 soundfile
 numpy
+sherpa-onnx
+python-multipart

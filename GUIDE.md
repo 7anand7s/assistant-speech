@@ -1,6 +1,8 @@
-# Self-Hosted TTS Endpoint — Connection Guide
+# Self-Hosted Speech Endpoint — Connection Guide
 
 **Service:** `kokoro-tts` container on Unraid (`tower`) · **Port:** `8880` · **Auth:** none (private network only)
+
+Does two things: **TTS** (text → speech) and **STT** (speech → text). Both local, both on CPU.
 
 ## 1. Addresses — which URL to use from where
 
@@ -70,19 +72,30 @@ curl "http://192.168.0.250:8880/voices?engine=kokoro&lang=en-us"
 curl "http://192.168.0.250:8880/voices?engine=edge&lang=en-US"
 ```
 
-### `POST /normalize` — debug the text cleanup
+### `POST /stt` — speech to text (transcription)
 
-Returns JSON showing what the cleanup pipeline would do to a text, without doing TTS:
+The reverse of `/tts`: upload an audio file, get English text back. Any format works (wav, mp3, m4a, ogg, flac…) — it's transcribed by Parakeet locally on CPU, fast (3–20× real-time).
 
 ```bash
-curl -X POST http://192.168.0.250:8880/normalize \
-  -H "Content-Type: application/json" \
-  -d '{"text": "**Important**: see [details](https://example.com/track) 📦"}'
+curl -X POST http://192.168.0.250:8880/stt -F "file=@recording.m4a"
+# -> {"text": "...", "duration_seconds": 11.0, "language": "en", "model": "parakeet-tdt-0.6b-v2"}
 ```
+
+### `POST /v1/audio/transcriptions` — OpenAI-compatible STT
+
+Drop-in for anything that speaks the OpenAI transcription API (Whisper clients, etc.). Multipart form upload:
+
+```bash
+curl -X POST http://192.168.0.250:8880/v1/audio/transcriptions \
+  -F "file=@recording.wav" -F "model=whisper-1"
+# -> {"text": "..."}     (add -F "response_format=text" for plain text)
+```
+
+English only. Both STT endpoints return **404** if the deployment sets `STT_ENABLED=0`.
 
 ### `GET /health` — status of every component
 
-Reports the TTS engine and normalization LLM separately (`kokoro_available`, models loaded, etc.).
+Reports the TTS engine, normalization LLM, and STT engine separately (`kokoro_available`, `stt_engine.available`, models loaded, etc.).
 
 ### `POST /chat/speak` — ⚠️ disabled in this deployment
 
@@ -205,7 +218,22 @@ Or use the OpenAI SDK directly:
 ```python
 from openai import OpenAI
 client = OpenAI(base_url="http://192.168.0.250:8880/v1", api_key="anything")
+
+# TTS
 client.audio.speech.create(model="tts-1", input="Hi!", voice="nova").write_to_file("out.mp3")
+
+# STT — transcribe an audio file
+with open("recording.mp3", "rb") as f:
+    print(client.audio.transcriptions.create(model="whisper-1", file=f).text)
+```
+
+Plain `requests` for STT:
+
+```python
+import requests
+with open("recording.mp3", "rb") as f:
+    r = requests.post("http://192.168.0.250:8880/stt", files={"file": f})
+print(r.json()["text"])
 ```
 
 ### JavaScript / Node
@@ -248,6 +276,7 @@ Config changes = edit `environment:` in `docker-compose.yml`, then `docker compo
 | Enable the `/chat/speak` demo | `CHAT_ENABLED=1` (loads `llama3.2:3b`; can pin that model to CPU for other apps — see README) |
 | Different default voice | `KOKORO_VOICE=am_michael` |
 | Default to cloud voices | `TTS_ENGINE=edge` |
+| Turn off transcription (STT) | `STT_ENABLED=0` (unmounts `/stt` + `/v1/audio/transcriptions`; Parakeet never loads) |
 
 Note: `docker compose` itself vanishes from the host on every Unraid reboot (the container keeps running; only the CLI plugin is lost). Reinstall before rebuild work, or persist it via `/boot/config/go`.
 
@@ -260,5 +289,8 @@ Note: `docker compose` itself vanishes from the host on every Unraid reboot (the
 | Edge voice fails | Edge needs internet (Microsoft cloud); Kokoro doesn't |
 | Speech sounds odd on messy text | Inspect with `POST /normalize`; check `flagged_log.jsonl` |
 | `/chat/speak` → 404 | Intentional — `CHAT_ENABLED=0` (§2/§8) |
+| `/stt` → 404 | `STT_ENABLED=0` in this deployment (§8) |
+| `/stt` → 400 "could not decode audio" | Not a valid/complete audio file; try re-exporting to wav or mp3 |
+| STT transcript empty or wrong | Parakeet is English-only; check the clip actually has speech. `curl .../health` → `stt_engine.error` if the model didn't load (models/ mount) |
 | Container gone after reboot | It should auto-start (`restart: unless-stopped`). If Docker itself was off: check the array started first |
 | Slow first response after idle | Normalization models are pinned resident, so it's not them; edge = internet latency; check server load (`docker stats kokoro-tts`) |
