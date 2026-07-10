@@ -86,7 +86,8 @@ curl -X POST http://localhost:8880/tts \
 Fields: `text`, `engine` (`kokoro`|`edge`, default `kokoro`), `voice`,
 `speed` (kokoro), `rate`/`pitch` (edge, e.g. `"+10%"` / `"-5Hz"`), `normalize`
 (bool, default `true` — set `false` to skip the cleanup pipeline for
-already-clean text and shave off the regex pass).
+already-clean text and shave off the regex pass), `stream` (bool, default
+`false` — see [Streaming](#streaming) below).
 
 Response headers: `X-TTS-Engine`, `X-Text-Normalized` (`true` if the LLM
 fallback stage fired), `X-Normalize-Model` (which model handled it, if any).
@@ -123,6 +124,46 @@ curl -X POST http://localhost:8880/chat/speak \
 curl -X POST "http://localhost:8880/chat/speak?json=1" -H "Content-Type: application/json" \
   -d '{"prompt":"Tell me a one-line joke"}'
 ```
+
+## Streaming
+
+Pass `"stream": true` to `/tts` or `/chat/speak` to get audio as it's
+produced instead of waiting for the whole thing (see `streaming.py`).
+
+```bash
+# audio starts arriving before the LLM has finished writing its reply
+curl -N -X POST http://localhost:8880/chat/speak \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Write three sentences about the ocean.","stream":true}' \
+  -o reply.mp3
+```
+
+For `/chat/speak`, this streams **both** stages: Ollama tokens are consumed
+as they're generated, buffered into complete sentences, and each sentence is
+normalized → synthesized → streamed out immediately while the LLM is still
+writing later ones. Measured on this box (llama3.2:3b, three sentences):
+
+| | first audio byte | total |
+|---|---|---|
+| `stream: true` | **5.2s** | 9.3s |
+| `stream: false` | 13.3s | 13.3s |
+
+Notes and limits:
+
+- Kokoro is not autoregressive — it needs a full sentence per synthesis pass,
+  so **sentence** is the streaming granularity, not token. (This is what
+  production streaming-TTS APIs do for non-autoregressive vocoders too.)
+- Kokoro's per-sentence audio is piped through a **single long-lived ffmpeg
+  process**, so the result is one continuous, gapless MP3 rather than
+  concatenated files with duplicate headers — verified to decode with zero
+  frame errors at the sentence joins. `edge` streams Microsoft's own MP3
+  chunks straight through, no re-encoding.
+- `stream: true` returns audio only — it ignores `?json=1`, and omits the
+  `X-Text-Normalized` / `X-Normalize-Model` headers, since those aren't
+  known until after the stream is done.
+- The engine is resolved **once, upfront** for a stream (a streaming response
+  can't swap encoders mid-flight). If Kokoro is unavailable the whole stream
+  uses edge, reported as `X-TTS-Engine: edge-fallback`.
 
 ### `GET /voices?engine=kokoro|edge` — list voices
 

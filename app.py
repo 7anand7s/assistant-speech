@@ -21,6 +21,15 @@ Endpoints:
   POST /chat/speak          - {"prompt": "..."} -> ask Ollama, speak the reply -> mp3
   POST /chat/speak?json=1   - same, but returns {"reply": ..., "audio_b64": ..., "engine": ...}
   POST /normalize           - {"text": "..."} -> inspect the cleanup pipeline without doing TTS
+
+Streaming: pass "stream": true to /tts or /chat/speak to get audio streamed
+sentence-by-sentence as it's synthesized instead of waiting for the whole
+thing. For /chat/speak, this also streams LLM tokens from Ollama rather
+than waiting for the full reply - tokens are buffered into sentences, each
+sentence is normalized + synthesized + streamed as soon as it's ready, so
+audio for the first sentence can reach the client while the LLM is still
+generating later ones. "stream": true ignores ?json=1 (streaming returns
+raw audio only, no reply text alongside it) - see streaming.py.
 """
 
 import asyncio
@@ -37,6 +46,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 import normalize
+import streaming
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("tts")
@@ -163,6 +173,67 @@ async def synth_edge(text: str, voice: str, rate: str = "+0%", pitch: str = "+0H
     return buf.getvalue()
 
 
+# --- Streaming synthesis: sentence-by-sentence, audio flows as it's ready ---
+
+async def synth_kokoro_sentences_stream(sentences_iter, voice: str, speed: float = 1.0):
+    """One continuous MP3 stream built from per-sentence Kokoro synthesis."""
+    kokoro = await get_kokoro()
+    lang = KOKORO_LANG_CODES.get(voice[:1], "en-us")
+    async with streaming.StreamingMp3Encoder(sample_rate=24000) as enc:
+        async def feed():
+            async for sentence in sentences_iter:
+                try:
+                    samples, sr = await asyncio.to_thread(kokoro.create, sentence, voice=voice, speed=speed, lang=lang)
+                except Exception as e:
+                    log.warning("kokoro streaming synth failed for a sentence, skipping it: %s", e)
+                    continue
+                await enc.write(samples)
+            await enc.finish_writing()
+
+        feed_task = asyncio.create_task(feed())
+        while True:
+            chunk = await enc.read_chunk()
+            if chunk is None:
+                break
+            yield chunk
+        await feed_task
+
+
+async def synth_edge_sentences_stream(sentences_iter, voice: str, rate: str = "+0%", pitch: str = "+0Hz"):
+    """edge-tts already produces streamable MP3 chunks from Microsoft's own
+    encoder - just forward them sentence by sentence, no re-encoding needed."""
+    async for sentence in sentences_iter:
+        try:
+            communicate = edge_tts.Communicate(sentence, voice, rate=rate, pitch=pitch)
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    yield chunk["data"]
+        except Exception as e:
+            log.warning("edge streaming synth failed for a sentence, skipping it: %s", e)
+            continue
+
+
+async def resolve_streaming_engine(engine: str | None) -> str:
+    """Decide the engine once, upfront, since a streaming MP3 response can't
+    switch encoders mid-flight the way the non-streaming path's per-request
+    fallback can."""
+    engine = engine or DEFAULT_ENGINE
+    if engine == "kokoro":
+        try:
+            await get_kokoro()
+            return "kokoro"
+        except Exception:
+            return "edge-fallback"
+    return "edge"
+
+
+async def normalized_sentence_stream(sentences_iter):
+    async for s in sentences_iter:
+        final, _flagged, _model = await normalize.normalize_text(s)
+        if final.strip():
+            yield final
+
+
 # --- Unified dispatch with kokoro -> edge fallback --------------------------
 
 def resolve_voice(engine: str, voice: str | None) -> str:
@@ -270,10 +341,23 @@ class TTSRequest(BaseModel):
     rate: str = "+0%"           # used by edge, e.g. "-10%", "+25%"
     pitch: str = "+0Hz"         # used by edge, e.g. "-5Hz", "+10Hz"
     normalize: bool = True      # run text-cleanup pipeline (regex + LLM fallback) first
+    stream: bool = False        # stream audio sentence-by-sentence instead of waiting for it all
 
 
 @app.post("/tts")
 async def tts(req: TTSRequest):
+    if req.stream:
+        used = await resolve_streaming_engine(req.engine)
+        sentences = normalized_sentence_stream(_iter(streaming.split_all_sentences(req.text))) \
+            if req.normalize else _iter(streaming.split_all_sentences(req.text))
+        if used == "kokoro":
+            gen = synth_kokoro_sentences_stream(sentences, resolve_voice("kokoro", req.voice), req.speed)
+        else:
+            gen = synth_edge_sentences_stream(sentences, resolve_voice("edge", req.voice), req.rate, req.pitch)
+        return StreamingResponse(gen, media_type="audio/mpeg", headers={
+            "Content-Disposition": 'inline; filename="speech.mp3"', "X-TTS-Engine": used,
+        })
+
     audio, used, flagged, norm_model = await synthesize(
         req.text, req.engine, req.voice, req.speed, req.rate, req.pitch, req.normalize)
     return StreamingResponse(io.BytesIO(audio), media_type="audio/mpeg", headers={
@@ -282,6 +366,11 @@ async def tts(req: TTSRequest):
         "X-Text-Normalized": str(flagged).lower(),
         "X-Normalize-Model": norm_model or "",
     })
+
+
+async def _iter(items: list):
+    for item in items:
+        yield item
 
 
 class OpenAISpeechRequest(BaseModel):
@@ -311,10 +400,26 @@ class ChatSpeakRequest(BaseModel):
     voice: str | None = None
     system: str | None = None
     normalize: bool = True
+    stream: bool = False   # pipeline: stream LLM tokens -> sentence chunks -> streamed audio
 
 
 @app.post("/chat/speak")
 async def chat_speak(req: ChatSpeakRequest, json_out: bool = Query(False, alias="json")):
+    if req.stream:
+        model = req.model or OLLAMA_MODEL
+        used = await resolve_streaming_engine(req.engine)
+        token_iter = streaming.stream_ollama_tokens(OLLAMA_URL, model, req.prompt, req.system)
+        sentence_iter = streaming.sentences_from_token_stream(token_iter)
+        sentences = normalized_sentence_stream(sentence_iter) if req.normalize else sentence_iter
+        if used == "kokoro":
+            gen = synth_kokoro_sentences_stream(sentences, resolve_voice("kokoro", req.voice))
+        else:
+            gen = synth_edge_sentences_stream(sentences, resolve_voice("edge", req.voice))
+        return StreamingResponse(gen, media_type="audio/mpeg", headers={
+            "X-Ollama-Model": model, "X-TTS-Engine": used,
+            "Content-Disposition": 'inline; filename="reply.mp3"',
+        })
+
     payload = {
         "model": req.model or OLLAMA_MODEL,
         "prompt": req.prompt,
