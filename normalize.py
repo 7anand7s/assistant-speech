@@ -1,5 +1,10 @@
 """
-Text normalization pipeline for TTS.
+NORMALIZATION LLM (role 2) - rewords text so it reads cleanly aloud.
+
+This stage NEVER generates content. It only rewords text that already exists,
+and only for the small fraction of it that the regex stage flags. The models
+here (qwen2.5:1.5b, then gemma3:1b) are unrelated to the chat model in chat.py,
+which does the opposite job - writing new text from a prompt.
 
 Design principle: reframe for speech, never delete information. A URL or
 markdown link still points somewhere real - the goal is to make it speakable
@@ -14,7 +19,7 @@ Stage 1: deterministic regex cleaner (microseconds, handles the bulk of
 Stage 2: whitelist check (needs_review) on what Stage 1 left behind.
 Stage 3: tiny local LLM fallback (Ollama, CPU-only, kept resident) - only
           invoked for text Stage 2 flags, never on the hot path for normal
-          text. gemma3:1b is tried first, qwen2.5:1.5b second. Each
+          text. qwen2.5:1.5b is tried first, gemma3:1b second. Each
           candidate's output is verified to contain every placeholder used
           in the input, verbatim - if a model drops or mangles one (tiny
           models do this), its output is discarded and the next candidate
@@ -29,29 +34,15 @@ that show up repeatedly should get folded into the Stage 1 regex cleaner.
 
 import json
 import logging
-import os
 import re
 import time
 import urllib.parse
-from pathlib import Path
 
 import httpx
 
+import config
+
 log = logging.getLogger("tts.normalize")
-
-BASE_DIR = Path(__file__).resolve().parent
-FLAGGED_LOG_PATH = Path(os.getenv("NORM_LOG_PATH", str(BASE_DIR / "flagged_log.jsonl")))
-
-NORM_ENABLED = os.getenv("NORM_ENABLED", "1") != "0"
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-
-# Tried in order; each forced to CPU-only and kept resident (keep_alive).
-FALLBACK_MODELS = [m for m in [
-    os.getenv("NORM_LLM_PRIMARY", "qwen2.5:1.5b"),
-    os.getenv("NORM_LLM_SECONDARY", "gemma3:1b"),
-] if m]
-FALLBACK_KEEP_ALIVE = int(os.getenv("NORM_LLM_KEEP_ALIVE", "-1"))  # -1 = keep loaded forever
-FALLBACK_TIMEOUT = float(os.getenv("NORM_LLM_TIMEOUT", "10"))
 
 FALLBACK_SYSTEM_PROMPT = (
     "You reword text so a text-to-speech engine reads it naturally. Only "
@@ -144,8 +135,8 @@ def needs_review(cleaned_text: str) -> bool:
 
 def _log_flagged(raw: str, cleaned: str, final: str, model_used: str | None):
     try:
-        FLAGGED_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with FLAGGED_LOG_PATH.open("a") as f:
+        config.NORM_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with config.NORM_LOG_PATH.open("a") as f:
             f.write(json.dumps({
                 "ts": time.time(), "raw": raw, "stage1_cleaned": cleaned,
                 "final": final, "model_used": model_used,
@@ -156,12 +147,12 @@ def _log_flagged(raw: str, cleaned: str, final: str, model_used: str | None):
 
 async def _call_ollama(model: str, text: str, timeout: float) -> str:
     async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.post(f"{OLLAMA_URL}/api/generate", json={
+        r = await client.post(f"{config.OLLAMA_URL}/api/generate", json={
             "model": model,
             "system": FALLBACK_SYSTEM_PROMPT,
             "prompt": text,
             "stream": False,
-            "keep_alive": FALLBACK_KEEP_ALIVE,
+            "keep_alive": config.NORM_KEEP_ALIVE,
             "options": {"num_gpu": 0, "num_ctx": 1024},
         })
         r.raise_for_status()
@@ -181,9 +172,9 @@ async def llm_normalize(text: str) -> tuple[str, str | None]:
     still present, verbatim, in its output - otherwise it's discarded as a
     corruption risk and the next model is tried. Falls back to the input
     unchanged (safe read-through) if every candidate fails."""
-    for model in FALLBACK_MODELS:
+    for model in config.NORM_MODELS:
         try:
-            out = await _call_ollama(model, text, FALLBACK_TIMEOUT)
+            out = await _call_ollama(model, text, config.NORM_TIMEOUT)
             if not out:
                 continue
             if not _placeholders_intact(text, out):
@@ -196,21 +187,21 @@ async def llm_normalize(text: str) -> tuple[str, str | None]:
     return text, None
 
 
-async def warm_up_fallback_models():
+async def warm_up_models():
     """Ping each fallback model once at startup so they're resident (CPU)
     before the first flagged request needs them; keep_alive keeps them
     loaded indefinitely after that."""
-    for model in FALLBACK_MODELS:
+    for model in config.NORM_MODELS:
         try:
             await _call_ollama(model, "hello", timeout=60)
-            log.info("warmed up normalize model '%s' (CPU, keep_alive=%s)", model, FALLBACK_KEEP_ALIVE)
+            log.info("warmed up normalize model '%s' (CPU, keep_alive=%s)", model, config.NORM_KEEP_ALIVE)
         except Exception as e:
             log.warning("could not warm up normalize model '%s': %s", model, e)
 
 
 async def normalize_text(text: str) -> tuple[str, bool, str | None]:
     """Full pipeline. Returns (final_text, was_flagged, model_used)."""
-    if not NORM_ENABLED:
+    if not config.NORM_ENABLED:
         return text, False, None
     cleaned, placeholders = clean_stage1(text)
     if not needs_review(cleaned):

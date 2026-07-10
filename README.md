@@ -1,7 +1,28 @@
-# Neural TTS + Ollama Endpoint
+# Self-hosted Neural TTS
 
-A local TTS API with two engines, wired to the **Ollama** instance running on
-the Unraid host:
+A local text-to-speech service. Kokoro runs the audio, Windows neural voices
+are the fallback, and a tiny LLM cleans up messy text before it's spoken.
+
+## Three independent roles — don't confuse them
+
+There are up to three models in play, doing **completely different jobs**.
+They are unrelated: changing one doesn't affect the others. `/health` reports
+each separately.
+
+| # | Role | Where | Default model | Job |
+|---|---|---|---|---|
+| 1 | **TTS engine** — *the actual product* | `engines.py` | Kokoro (ONNX) | Turns text into audio. **No LLM involved.** |
+| 2 | **Normalization LLM** — *support* | `normalize.py` | `qwen2.5:1.5b` → `gemma3:1b` | **Rewords** existing text so it reads cleanly aloud. Never generates content. |
+| 3 | **Chat LLM** — *demo only* | `chat.py` | `llama3.2:3b` | **Writes new text** from a prompt, purely so `/chat/speak` has something to speak. **Not part of the TTS pipeline.** |
+
+Roles 2 and 3 both talk to Ollama, but that's just shared transport — different
+models, opposite jobs. **If you already have text to speak, you only need role 1.**
+
+Proof they're separate: run `CHAT_ENABLED=0 ./start.sh` and `llama3.2:3b` is
+never loaded, `/chat/speak` returns 404, and `/tts`, `/v1/audio/speech`,
+`/voices` and `/normalize` all work exactly as before.
+
+## Role 1 — the TTS engine (core)
 
 - **Kokoro** (default) — a local, open-weight neural TTS model (`kokoro-onnx`).
   Runs fully offline, **CPU-only** (forced via `ONNX_PROVIDER=CPUExecutionProvider`
@@ -14,6 +35,8 @@ the Unraid host:
 
 Every response includes an `X-TTS-Engine` header telling you which engine
 actually produced the audio (`kokoro`, `edge`, or `edge-fallback`).
+
+## Role 2 — the normalization pipeline
 
 Before synthesis, text passes through a **normalization pipeline**
 (`normalize.py`) built on one rule: **reframe for speech, never delete
@@ -43,27 +66,58 @@ Normal clean text skips the LLM stage entirely. Flagged cases are logged to
 `flagged_log.jsonl` for review — recurring patterns should get folded into
 the Stage 1 regex cleaner.
 
+## Role 3 — the chat LLM (demo only, optional)
+
+`llama3.2:3b` exists **only** to write text for the `/chat/speak` demo, so you
+can hear the TTS engine without supplying your own text. It is not part of the
+TTS pipeline and not part of normalization. Turn it off with `CHAT_ENABLED=0`
+and nothing else changes.
+
 ## Run
 
 ```bash
-./start.sh
+./start.sh                      # everything
+CHAT_ENABLED=0 ./start.sh       # TTS only — no demo chat endpoint, no chat model loaded
+CHAT_MODEL="qwen3:8b" ./start.sh  # swap the demo's writer model
 ```
 
-Server listens on `0.0.0.0:8880`. Defaults (override via env vars before running):
+Server listens on `0.0.0.0:8880`. Config is grouped by role (see `config.py`):
+
+**Shared**
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `TTS_PORT` | `8880` | Listen port |
+| `OLLAMA_URL` | `http://172.18.0.1:11434` | Ollama host (docker gateway). Used by roles 2 and 3 only. |
+
+**Role 1 — TTS engine (no LLM)**
+
+| Variable | Default | Meaning |
+|---|---|---|
 | `TTS_ENGINE` | `kokoro` | Default engine: `kokoro` or `edge` |
 | `KOKORO_VOICE` | `af_heart` | Default Kokoro voice |
 | `TTS_VOICE` | `en-US-AriaNeural` | Default edge/Windows voice (used directly, or as fallback) |
 | `ONNX_PROVIDER` | `CPUExecutionProvider` | Forces Kokoro to run on CPU only |
-| `OLLAMA_URL` | `http://172.18.0.1:11434` | Ollama on the Unraid host (docker gateway) |
-| `OLLAMA_MODEL` | `llama3.2:3b` | Default chat model |
+
+**Role 2 — normalization LLM (rewords, never generates)**
+
+| Variable | Default | Meaning |
+|---|---|---|
 | `NORM_ENABLED` | `1` | Set to `0` to disable the normalization pipeline globally |
-| `NORM_LLM_PRIMARY` | `qwen2.5:1.5b` | Primary normalization fallback model (CPU, always resident) |
+| `NORM_LLM_PRIMARY` | `qwen2.5:1.5b` | Primary normalization model (CPU, always resident) |
 | `NORM_LLM_SECONDARY` | `gemma3:1b` | Tried if the primary fails/is unreachable |
 | `NORM_LLM_KEEP_ALIVE` | `-1` | Ollama keep_alive for both models; `-1` = never unload |
+
+**Role 3 — chat LLM (demo only)**
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CHAT_ENABLED` | `1` | `0` unmounts `/chat/speak` entirely; no chat model is loaded |
+| `CHAT_MODEL` | `llama3.2:3b` | The demo's text *writer*. Nothing to do with TTS or normalization. |
+
+> `OLLAMA_MODEL` is still accepted as a legacy alias for `CHAT_MODEL` (it
+> shipped in the first release), but the name was misleading — it only ever
+> set the chat model. Prefer `CHAT_MODEL`.
 
 ## Endpoints
 
@@ -109,9 +163,14 @@ curl -X POST http://localhost:8880/v1/audio/speech \
 Open WebUI setup: **Admin → Settings → Audio → TTS** → engine `OpenAI`,
 API base `http://<this-host>:8880/v1`, any API key.
 
-### `POST /chat/speak` — ask Ollama, hear the answer
+### `POST /chat/speak` — **demo only** (role 3)
 
-Sends your prompt to Ollama, speaks the reply with the default (or requested) engine.
+Asks the *chat* LLM (`CHAT_MODEL`) to **write** a reply to your prompt, then
+speaks it. This is a convenience demo, not the TTS product — if you already
+have text, use `/tts`. Only mounted when `CHAT_ENABLED=1`.
+
+`"model"` here overrides the **chat** model, not the TTS engine or the
+normalization model.
 
 ```bash
 # returns mp3 directly
@@ -120,10 +179,16 @@ curl -X POST http://localhost:8880/chat/speak \
   -d '{"prompt":"Tell me a one-line joke","model":"qwen3:8b","voice":"am_michael"}' \
   -o reply.mp3
 
-# or JSON with the text reply + base64 audio + which engine was used
+# or JSON — note the three roles are reported separately
 curl -X POST "http://localhost:8880/chat/speak?json=1" -H "Content-Type: application/json" \
   -d '{"prompt":"Tell me a one-line joke"}'
+# -> {"reply": "...", "chat_model": "llama3.2:3b",   <- role 3 wrote it
+#     "engine": "kokoro",                            <- role 1 spoke it
+#     "normalize_model": null, ...}                  <- role 2 wasn't needed
 ```
+
+Response header is `X-Chat-Model` (was `X-Ollama-Model` before v3 — renamed
+because "Ollama model" was ambiguous between roles 2 and 3).
 
 ## Streaming
 
@@ -189,6 +254,19 @@ curl -X POST http://localhost:8880/normalize -H "Content-Type: application/json"
 ```
 
 ### `GET /health` — liveness, which engines/models are up, current config
+
+## Repo layout
+
+The file structure mirrors the three roles:
+
+```
+config.py      all config, grouped by role, with each role's job documented
+engines.py     ROLE 1  TTS engines (Kokoro + edge-tts). No LLM anywhere in it.
+normalize.py   ROLE 2  normalization LLM — rewords text, never generates
+chat.py        ROLE 3  chat LLM demo — /chat/speak router; not mounted if CHAT_ENABLED=0
+streaming.py   shared  sentence chunking + gapless streaming MP3 encoder
+app.py         FastAPI app: /tts, /v1/audio/speech, /voices, /health, /normalize
+```
 
 ## Notes
 
