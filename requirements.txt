@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+edge-tts
+httpx
+pydantic
+kokoro-onnx
+soundfile
+numpy

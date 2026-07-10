@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+models/
+flagged_log.jsonl
+*.mp3
+*.wav
