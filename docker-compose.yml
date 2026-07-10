@@ -1,0 +1,28 @@
+services:
+  tts:
+    build: .
+    container_name: kokoro-tts
+    ports:
+      - "8880:8880"
+    environment:
+      # Ollama runs on the Unraid host (its own container, port published on the host)
+      - OLLAMA_URL=http://host.docker.internal:11434
+      # Deployed endpoint is TTS-only: /chat/speak stays unmounted, llama3.2:3b never loaded
+      - CHAT_ENABLED=0
+      # Whole service stays off the GPU (see README - this is deliberate)
+      - ONNX_PROVIDER=CPUExecutionProvider
+      - OLLAMA_FORCE_CPU=1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # 330MB of Kokoro weights live in the repo's models/, not in the image
+      - ./models:/app/models:ro
+      # normalization audit log persists in the repo dir (gitignored)
+      - ./flagged_log.jsonl:/app/flagged_log.jsonl
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8880/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
