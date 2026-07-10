@@ -66,6 +66,23 @@ Normal clean text skips the LLM stage entirely. Flagged cases are logged to
 `flagged_log.jsonl` for review — recurring patterns should get folded into
 the Stage 1 regex cleaner.
 
+### Is normalization on by default? Yes — at every layer
+
+| Layer | Default | How to turn off |
+|---|---|---|
+| Service-wide | on (`NORM_ENABLED=1`) | `NORM_ENABLED=0` — disables the whole pipeline |
+| Per request | on (`"normalize": true`) | `"normalize": false` on `/tts` and `/chat/speak` |
+| Stage 3 LLM | **only on flagged text** | n/a — clean text never reaches it |
+
+"Normalization enabled" does **not** mean an LLM call per request. Clean text
+only pays the microsecond regex pass; the LLM fires only for the small
+fraction Stage 2 flags. Check `X-Text-Normalized` on the response to see
+whether it fired.
+
+Note: `/v1/audio/speech` has **no** `normalize` field — it always normalizes,
+and can only be turned off globally via `NORM_ENABLED=0`. This keeps the
+endpoint's schema strictly OpenAI-compatible.
+
 ## Role 3 — the chat LLM (demo only, optional)
 
 `llama3.2:3b` exists **only** to write text for the `/chat/speak` demo, so you
@@ -160,6 +177,12 @@ curl -X POST http://localhost:8880/v1/audio/speech \
   -o speech.mp3
 ```
 
+Fields are the strict OpenAI set — `model` (accepted, ignored), `input`,
+`voice`, `response_format` (mp3 only), `speed`. There is deliberately **no
+`normalize` or `stream` field** here; normalization always runs (disable
+globally with `NORM_ENABLED=0`), and audio is returned as one complete MP3.
+Use `/tts` if you want per-request control over either.
+
 Open WebUI setup: **Admin → Settings → Audio → TTS** → engine `OpenAI`,
 API base `http://<this-host>:8880/v1`, any API key.
 
@@ -250,10 +273,14 @@ checking what the LLM fallback does with a given input.
 ```bash
 curl -X POST http://localhost:8880/normalize -H "Content-Type: application/json" \
   -d '{"text":"**Important**: your order #4829103 ships tomorrow 📦 see [details](https://example.com/track)"}'
-# -> {"raw": "...", "stage1_cleaned": "...", "flagged": true, "final": "...", "model_used": "gemma3:1b"}
+# -> {"raw": "...", "stage1_cleaned": "...", "flagged": true, "final": "...", "model_used": "qwen2.5:1.5b"}
 ```
 
-### `GET /health` — liveness, which engines/models are up, current config
+### `GET /health` — liveness + status of each role, reported separately
+
+Returns `tts_engine`, `normalization_llm` and `chat_llm` as three distinct
+objects, each with a plain-English `role` description, so it's always obvious
+which model is doing what.
 
 ## Repo layout
 
@@ -279,7 +306,7 @@ app.py         FastAPI app: /tts, /v1/audio/speech, /voices, /health, /normalize
 - If Kokoro fails to load (missing model files, etc.) or errors on a specific
   request, requests transparently fall back to the edge/Windows voice — check
   `X-TTS-Engine: edge-fallback` on the response, or `GET /health` →
-  `kokoro_available` / `kokoro_error`.
+  `tts_engine.kokoro_available` / `tts_engine.kokoro_error`.
 - `gemma3:270m` was tested first for the normalization fallback and rejected —
   it refused a benign request, ignored its system prompt on another, and
   returned empty on a third. `gemma3:1b` and `qwen2.5:1.5b` both perform

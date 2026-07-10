@@ -160,6 +160,8 @@ async def tts(req: TTSRequest):
 
 
 class OpenAISpeechRequest(BaseModel):
+    # Strict OpenAI schema - no "normalize"/"stream" extensions, so clients that
+    # validate against the spec keep working. Use /tts for per-request control.
     model: str = "tts-1"          # accepted and ignored
     input: str
     voice: str | None = None
@@ -171,6 +173,7 @@ class OpenAISpeechRequest(BaseModel):
 async def openai_speech(req: OpenAISpeechRequest):
     pct = int((max(0.25, min(req.speed, 4.0)) - 1.0) * 100)
     rate = f"{'+' if pct >= 0 else ''}{pct}%"
+    # Normalization always on here; only NORM_ENABLED=0 disables it.
     audio, used, flagged, norm_model = await engines.synthesize(req.input, None, req.voice, req.speed, rate)
     return StreamingResponse(io.BytesIO(audio), media_type="audio/mpeg", headers={
         "X-TTS-Engine": used,
