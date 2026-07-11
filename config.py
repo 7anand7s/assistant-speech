@@ -118,3 +118,15 @@ STT_MODEL_DIR = os.getenv(
     str(BASE_DIR / "models" / "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"),
 )
 STT_NUM_THREADS = int(os.getenv("STT_NUM_THREADS", "4"))
+
+# Streaming STT (WebSocket /stt/stream). Parakeet is an OFFLINE model - its
+# encoder uses full-context attention and physically cannot be driven token-by-
+# token (it lacks the chunked-attention metadata streaming models carry). So
+# "streaming" here means VAD-segmented: a voice-activity detector (Silero) cuts
+# the incoming audio at natural pauses, and each complete speech segment is
+# transcribed with the accurate offline model and emitted immediately. You get
+# transcripts as you speak, segment by segment, without trading down the model.
+STT_VAD_MODEL_PATH = os.getenv("STT_VAD_MODEL_PATH", str(BASE_DIR / "models" / "silero_vad.onnx"))
+STT_VAD_THRESHOLD = float(os.getenv("STT_VAD_THRESHOLD", "0.5"))          # speech probability cutoff
+STT_VAD_MIN_SILENCE = float(os.getenv("STT_VAD_MIN_SILENCE", "0.5"))     # seconds of silence that ends a segment
+STT_VAD_MIN_SPEECH = float(os.getenv("STT_VAD_MIN_SPEECH", "0.25"))      # ignore blips shorter than this

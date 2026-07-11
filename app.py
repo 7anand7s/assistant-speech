@@ -94,10 +94,15 @@ async def health():
             except Exception:
                 pass
         stt_ok, stt_err = stt.stt_status()
+        import os
         stt_block.update({
             "model": "parakeet-tdt-0.6b-v2",
             "available": stt_ok,
             "error": stt_err if not stt_ok else None,
+            "streaming": {                       # WebSocket /stt/stream, VAD-segmented
+                "endpoint": "/stt/stream",
+                "vad_model_present": os.path.exists(config.STT_VAD_MODEL_PATH),
+            },
         })
 
     return {

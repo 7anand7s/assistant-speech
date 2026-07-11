@@ -152,6 +152,17 @@ i.e. 3–20× faster than real-time). No LLM involved. Any input audio
 format/samplerate works — ffmpeg decodes it to the 16 kHz mono the model wants.
 English only; disable with `STT_ENABLED=0`.
 
+**Streaming** (WebSocket `/stt/stream`): Parakeet is an *offline* model — its
+encoder uses full-context attention and physically can't be driven token-by-token
+(it lacks the chunked-attention metadata streaming models carry; loading it as a
+streaming model errors with `'window_size' does not exist in the metadata`).
+Rather than swap in a less accurate streaming model, "streaming" here is
+**VAD-segmented**: a Silero voice-activity detector cuts the incoming audio at
+natural pauses, and each complete speech segment is transcribed with the full
+accurate model and sent back immediately. From the client's side it's genuine
+streaming — talk, and transcript segments arrive as you pause — with no accuracy
+trade-off. Needs `models/silero_vad.onnx` (~640KB).
+
 ## Run
 
 ```bash
@@ -206,9 +217,13 @@ Server listens on `0.0.0.0:8880`. Config is grouped by role (see `config.py`):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `STT_ENABLED` | `1` | `0` unmounts `/stt` and `/v1/audio/transcriptions`; Parakeet never loads |
+| `STT_ENABLED` | `1` | `0` unmounts `/stt`, `/v1/audio/transcriptions` and `/stt/stream`; Parakeet never loads |
 | `STT_MODEL_DIR` | `models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8` | Path to the extracted Parakeet model dir |
 | `STT_NUM_THREADS` | `4` | CPU threads for transcription |
+| `STT_VAD_MODEL_PATH` | `models/silero_vad.onnx` | Silero VAD model, used only by the streaming WebSocket |
+| `STT_VAD_THRESHOLD` | `0.5` | Speech-probability cutoff for the VAD |
+| `STT_VAD_MIN_SILENCE` | `0.5` | Seconds of silence that ends a segment (lower = snappier, more fragmented) |
+| `STT_VAD_MIN_SPEECH` | `0.25` | Ignore speech blips shorter than this |
 
 ## Endpoints
 
@@ -385,6 +400,35 @@ curl -X POST http://localhost:8880/v1/audio/transcriptions \
 # -> {"text": "..."}
 ```
 
+### `WS /stt/stream` — streaming transcription (role 4)
+
+Send audio frames as you capture them, get transcript segments back as each
+phrase completes. VAD-segmented (see Role 4 above). All audio is **16 kHz mono**.
+
+- **client → server:** binary frames of raw PCM — `int16` by default, or
+  `float32` if you open the socket as `/stt/stream?format=f32`.
+- **client → server:** the text message `done` to flush trailing audio and finish.
+- **server → client:** `{"type":"segment","seq":N,"text":...,"start":s,"duration":s}`
+  per completed segment, then `{"type":"final","text":"<all joined>"}` at the end.
+  Errors arrive as `{"type":"error","detail":...}`.
+
+```python
+import asyncio, json, wave, numpy as np, websockets
+
+async def main():
+    w = wave.open("recording.wav"); pcm = np.frombuffer(w.readframes(w.getnframes()), np.int16)
+    async with websockets.connect("ws://localhost:8880/stt/stream") as ws:
+        for i in range(0, len(pcm), 1600):        # 100ms frames @ 16kHz
+            await ws.send(pcm[i:i+1600].tobytes())
+        await ws.send("done")
+        async for raw in ws:
+            m = json.loads(raw)
+            print(m["text"] if m["type"] in ("segment", "final") else m)
+            if m["type"] == "final": break
+
+asyncio.run(main())
+```
+
 ### `GET /health` — liveness + status of each role, reported separately
 
 Returns `tts_engine`, `normalization_llm`, `chat_llm` and `stt_engine` as
@@ -400,7 +444,7 @@ config.py      all config, grouped by role, with each role's job documented
 engines.py     ROLE 1  TTS engines (Kokoro + edge-tts). No LLM anywhere in it.
 normalize.py   ROLE 2  normalization LLM — rewords text, never generates
 chat.py        ROLE 3  chat LLM demo — /chat/speak router; not mounted if CHAT_ENABLED=0
-stt.py         ROLE 4  STT engine (Parakeet) — /stt + /v1/audio/transcriptions; not mounted if STT_ENABLED=0
+stt.py         ROLE 4  STT engine (Parakeet) — /stt, /v1/audio/transcriptions, WS /stt/stream; not mounted if STT_ENABLED=0
 streaming.py   shared  sentence chunking + gapless streaming MP3 encoder
 app.py         FastAPI app: /tts, /v1/audio/speech, /voices, /health, /normalize
 ```
@@ -414,6 +458,8 @@ app.py         FastAPI app: /tts, /v1/audio/speech, /voices, /health, /normalize
   - **Parakeet (STT):** `sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2`
     (~482MB) from the [sherpa-onnx asr-models release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models),
     extracted into `models/`.
+  - **Silero VAD (streaming STT only):** `models/silero_vad.onnx` (~640KB) from
+    the same [sherpa-onnx asr-models release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models).
 - `edge-tts` uses Microsoft's online neural TTS service, so it needs internet;
   Kokoro needs none. The LLM side (Ollama) is always local either way.
 - Ollama defaults to the GPU. Until `OLLAMA_FORCE_CPU` existed, the chat model
