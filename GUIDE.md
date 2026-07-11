@@ -91,31 +91,7 @@ curl -X POST http://192.168.0.250:8880/v1/audio/transcriptions \
 # -> {"text": "..."}     (add -F "response_format=text" for plain text)
 ```
 
-English only. All STT endpoints return **404** if the deployment sets `STT_ENABLED=0`.
-
-### `WS /stt/stream` — live streaming transcription
-
-For transcribing as you speak (live mic) rather than uploading a finished file. Open a WebSocket, send 16 kHz mono PCM frames as you capture them, and transcript segments come back as each phrase finishes (cut at natural pauses). Send the text `done` to finish; you'll get a `final` message with the full transcript.
-
-```python
-import asyncio, json, wave, numpy as np, websockets
-
-async def main():
-    w = wave.open("recording.wav")                 # 16 kHz mono
-    pcm = np.frombuffer(w.readframes(w.getnframes()), np.int16)
-    async with websockets.connect("ws://192.168.0.250:8880/stt/stream") as ws:
-        for i in range(0, len(pcm), 1600):          # 100 ms frames
-            await ws.send(pcm[i:i+1600].tobytes())
-        await ws.send("done")
-        async for raw in ws:
-            m = json.loads(raw)
-            print(m.get("text", m))
-            if m["type"] == "final": break
-
-asyncio.run(main())
-```
-
-Send `float32` instead of `int16` by opening `…/stt/stream?format=f32`. Segments arrive as `{"type":"segment","text":...}`; the end is `{"type":"final","text":...}`.
+English only. Both STT endpoints return **404** if the deployment sets `STT_ENABLED=0`.
 
 ### `GET /health` — status of every component
 
@@ -316,6 +292,5 @@ Note: `docker compose` itself vanishes from the host on every Unraid reboot (the
 | `/stt` → 404 | `STT_ENABLED=0` in this deployment (§8) |
 | `/stt` → 400 "could not decode audio" | Not a valid/complete audio file; try re-exporting to wav or mp3 |
 | STT transcript empty or wrong | Parakeet is English-only; check the clip actually has speech. `curl .../health` → `stt_engine.error` if the model didn't load (models/ mount) |
-| `/stt/stream` connects but no segments | Send raw **16 kHz mono** PCM (int16, or float32 with `?format=f32`) — not an encoded file. Segments only emit after a pause; send `done` to force a flush. `stt_engine.streaming.vad_model_present` must be true |
 | Container gone after reboot | It should auto-start (`restart: unless-stopped`). If Docker itself was off: check the array started first |
 | Slow first response after idle | Normalization models are pinned resident, so it's not them; edge = internet latency; check server load (`docker stats kokoro-tts`) |

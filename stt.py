@@ -7,21 +7,13 @@ as independent: no LLM anywhere in this file.
 sherpa-onnx runs on CPU by default and this build has no CUDA path, so - like
 Kokoro - it physically cannot touch the GPU. Any input audio format/samplerate
 is accepted: ffmpeg decodes it to the 16 kHz mono float32 the model expects.
-
-Two modes:
-  - Batch (POST /stt, POST /v1/audio/transcriptions): upload a whole clip.
-  - Streaming (WebSocket /stt/stream): send audio frames as you capture them,
-    get transcript segments back as each phrase completes. Parakeet is an
-    offline model, so streaming is VAD-segmented (see config.py) rather than
-    token-by-token - same accurate model, transcripts emitted at speech pauses.
 """
 
 import asyncio
-import json
 import logging
 
 import numpy as np
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 import config
 
@@ -157,125 +149,3 @@ async def openai_transcriptions(
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse(result["text"])
     return {"text": result["text"]}
-
-
-# --- Streaming: VAD-segmented transcription over a WebSocket ------------------
-#
-# Parakeet is offline (see module docstring), so we can't emit tokens mid-word.
-# Instead a Silero VAD segments the incoming audio at natural pauses, and each
-# completed speech segment is transcribed with the full accurate model and sent
-# back immediately. From the client's side it's genuine streaming: talk, and
-# transcript segments arrive as you pause.
-
-def _make_vad():
-    import sherpa_onnx
-
-    cfg = sherpa_onnx.VadModelConfig()
-    cfg.silero_vad.model = config.STT_VAD_MODEL_PATH
-    cfg.silero_vad.threshold = config.STT_VAD_THRESHOLD
-    cfg.silero_vad.min_silence_duration = config.STT_VAD_MIN_SILENCE
-    cfg.silero_vad.min_speech_duration = config.STT_VAD_MIN_SPEECH
-    cfg.sample_rate = TARGET_SR
-    if not cfg.validate():
-        raise RuntimeError(f"invalid VAD config - is {config.STT_VAD_MODEL_PATH} present?")
-    return sherpa_onnx.VoiceActivityDetector(cfg, buffer_size_in_seconds=30)
-
-
-def _transcribe_samples(recognizer, samples: np.ndarray) -> str:
-    stream = recognizer.create_stream()
-    stream.accept_waveform(TARGET_SR, samples)
-    recognizer.decode_stream(stream)
-    return stream.result.text.strip()
-
-
-@router.websocket("/stt/stream")
-async def stt_stream(ws: WebSocket):
-    """Streaming STT.
-
-    Protocol (all audio is 16 kHz mono):
-      client -> server  binary frames of raw PCM. int16 (default) or, if the
-                        connection is opened with ?format=f32, float32.
-      client -> server  text "done"  ->  flush any trailing audio and finish.
-      server -> client  {"type":"segment","seq":N,"text":...,"start":s,"duration":s}
-                        emitted as each speech segment completes.
-      server -> client  {"type":"final","text": "<all segments joined>"} at the end.
-      server -> client  {"type":"error","detail":...} on failure.
-    """
-    await ws.accept()
-    fmt = ws.query_params.get("format", "int16")
-
-    try:
-        recognizer = await get_recognizer()
-    except Exception as e:
-        await ws.send_text(json.dumps({"type": "error", "detail": f"STT model unavailable: {e}"}))
-        await ws.close()
-        return
-
-    try:
-        vad = await asyncio.to_thread(_make_vad)
-    except Exception as e:
-        await ws.send_text(json.dumps({"type": "error", "detail": str(e)}))
-        await ws.close()
-        return
-
-    seq = 0
-    segments: list[str] = []
-
-    async def drain_segments():
-        nonlocal seq
-        while not vad.empty():
-            seg = vad.front
-            # Copy every field we need BEFORE vad.pop(): pop() frees the
-            # segment's underlying C++ buffer, and seg.samples is a view into
-            # it - reading it after pop() is a use-after-free that yields
-            # garbage samples (and <unk> transcripts). np.array(..., copy=True)
-            # snapshots it into memory we own.
-            samples = np.array(seg.samples, dtype=np.float32, copy=True)
-            seg_start = seg.start
-            seg_len = len(samples)
-            vad.pop()
-            text = await asyncio.to_thread(_transcribe_samples, recognizer, samples)
-            seq += 1
-            if text:
-                segments.append(text)
-            await ws.send_text(json.dumps({
-                "type": "segment", "seq": seq, "text": text,
-                "start": round(seg_start / TARGET_SR, 2),
-                "duration": round(seg_len / TARGET_SR, 2),
-            }))
-
-    try:
-        while True:
-            msg = await ws.receive()
-            if msg["type"] == "websocket.disconnect":
-                break
-
-            if msg.get("bytes") is not None:
-                data = msg["bytes"]
-                if fmt == "f32":
-                    samples = np.frombuffer(data, dtype=np.float32)
-                else:
-                    samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-                if samples.size:
-                    vad.accept_waveform(samples)
-                    await drain_segments()
-
-            elif msg.get("text") is not None:
-                if msg["text"].strip().lower() == "done":
-                    vad.flush()
-                    await drain_segments()
-                    await ws.send_text(json.dumps({"type": "final", "text": " ".join(segments)}))
-                    break
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        log.warning("stt stream error: %s", e)
-        try:
-            await ws.send_text(json.dumps({"type": "error", "detail": str(e)}))
-        except Exception:
-            pass
-    finally:
-        try:
-            await ws.close()
-        except Exception:
-            pass
