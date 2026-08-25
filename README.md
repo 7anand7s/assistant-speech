@@ -434,3 +434,15 @@ app.py         FastAPI app: /tts, /v1/audio/speech, /voices, /health, /normalize
   `flagged_log.jsonl` over time. Link preservation, by contrast, is
   structurally guaranteed (placeholder + verification), not best-effort.
 - Setup was done with [uv](https://docs.astral.sh/uv/): `uv venv .venv && uv pip install -p .venv/bin/python -r requirements.txt`.
+
+## Assistant conversational integration reference
+
+The enriched application-side speech layer—authenticated final-transcript
+dictation, forced/estimated word timings, safe speech projection, short-opening
+TTS prefetch, one attributed multi-agent playback queue, highlighting,
+pause/resume/stop, barge-in, and Teaching narration events—is preserved under
+[`extras/assistant_conversation/`](extras/assistant_conversation/README.md).
+
+That directory is a versioned, hash-pinned reference bundle. It is deliberately
+excluded from the port-8880 runtime and Docker image, so it documents and
+reproduces the complete integration without changing this service's behavior.

@@ -1,0 +1,127 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Assistant speech integration boundary",
+    "version": "1.0.0",
+    "description": "Authenticated application boundary layered over the private CPU STT/TTS service. This is a frozen reference contract, not a new port-8880 endpoint."
+  },
+  "servers": [
+    {"url": "/api"}
+  ],
+  "security": [
+    {"bearerAuth": []}
+  ],
+  "paths": {
+    "/speech/transcriptions": {
+      "post": {
+        "operationId": "assistantSpeechTranscription",
+        "summary": "Return one final transcript without submitting an agent turn",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["audio"],
+                "properties": {
+                  "audio": {"type": "string", "format": "binary", "maxLength": 26214400},
+                  "mode": {"type": "string", "enum": ["dictation", "hands_free"], "default": "dictation"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Final transcript or typed fail-soft result",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TranscriptionResult"}}}
+          },
+          "400": {"description": "Empty upload"},
+          "401": {"description": "Authentication required"},
+          "413": {"description": "Audio exceeds 25 MiB"}
+        }
+      }
+    },
+    "/speak-message": {
+      "post": {
+        "operationId": "assistantSpeakMessage",
+        "summary": "Synthesize a safe visible message with word timings",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["text"],
+                "properties": {
+                  "text": {"type": "string", "minLength": 1, "maxLength": 8000},
+                  "realtime": {"type": "boolean", "default": false, "description": "Use estimated timings to minimize first-audio latency"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Fail-soft aligned speech result",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SpeechResult"}}}
+          },
+          "401": {"description": "Authentication required"},
+          "422": {"description": "Invalid bounded input"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {"type": "http", "scheme": "bearer"}
+    },
+    "schemas": {
+      "TranscriptionResult": {
+        "type": "object",
+        "required": ["ok", "schema_version", "transcript", "provenance"],
+        "properties": {
+          "ok": {"type": "boolean"},
+          "schema_version": {"type": "integer", "const": 1},
+          "transcription_id": {"type": "string", "pattern": "^stt_[0-9a-f]{32}$"},
+          "transcript": {"type": "string"},
+          "error": {
+            "type": "object",
+            "properties": {"code": {"type": "string", "enum": ["transcription_unavailable", "empty_transcript"]}},
+            "required": ["code"]
+          },
+          "provenance": {
+            "type": "object",
+            "required": ["owner", "mode"],
+            "properties": {
+              "owner": {"type": "string", "const": "assistant"},
+              "mode": {"type": "string", "enum": ["dictation", "hands_free"]},
+              "audio_retained": {"type": "boolean", "const": false}
+            }
+          }
+        }
+      },
+      "WordTiming": {
+        "type": "object",
+        "required": ["word", "start_ms", "end_ms"],
+        "properties": {
+          "word": {"type": "string", "minLength": 1},
+          "start_ms": {"type": "integer", "minimum": 0},
+          "end_ms": {"type": "integer", "minimum": 0}
+        }
+      },
+      "SpeechResult": {
+        "type": "object",
+        "required": ["ok", "audio", "audio_mime", "words", "alignment"],
+        "properties": {
+          "ok": {"type": "boolean"},
+          "audio": {"type": "string", "contentEncoding": "base64"},
+          "audio_mime": {"type": "string", "enum": ["", "audio/mpeg"]},
+          "words": {"type": "array", "items": {"$ref": "#/components/schemas/WordTiming"}},
+          "alignment": {"type": "string", "enum": ["forced", "estimated", "unavailable"]},
+          "realtime": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "schema": "assistant-teaching-speech-events-v1",
+  "transport": "authenticated-websocket",
+  "client_messages": {
+    "continue": {"type": "continue"},
+    "ask": {"type": "ask", "required": ["text"], "max_text_characters": 8000}
+  },
+  "server_events": {
+    "narration_chunk": {"required": ["type", "block_index", "text"]},
+    "audio_chunk": {"required": ["type", "block_index", "audio_base64"], "optional": ["text", "words", "alignment"]},
+    "answer_chunk": {"required": ["type", "text"]},
+    "answer_audio": {"required": ["type", "audio_base64"], "optional": ["text", "words", "alignment"]},
+    "diagram": {"required": ["type", "src"], "optional": ["caption"]},
+    "image": {"required": ["type", "src"], "optional": ["caption"]},
+    "pause_at_diagram": {"required": ["type"]},
+    "awaiting_input": {"required": ["type"], "optional": ["reason"]},
+    "narration_complete": {"required": ["type"]},
+    "error": {"required": ["type", "message"]}
+  },
+  "speech_rules": {
+    "canonical_text_remains_visible_if_audio_fails": true,
+    "audio_is_played_serially": true,
+    "word_timings_drive_highlighting": true,
+    "barge_in_stops_matching_playback_before_transcription": true
+  }
+}

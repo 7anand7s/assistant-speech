@@ -1,0 +1,32 @@
+{
+  "schema": "assistant-speech-reference-manifest-v1",
+  "captured_at_utc": "2026-08-25T06:49:09Z",
+  "source": {
+    "repository": "https://github.com/7anand7s/personel-coach.git",
+    "commit": "de8eadaf0c93ea17e0f1106d9aca45ca0a269e11",
+    "application_version": "0.43.2+87"
+  },
+  "snapshots": [
+    {"path": "snapshots/backend/assistant_routes.py.inc", "sha256": "b89af8bb91fb0df594147812ca276fffcd32ca86425b8af6b818097c4c48137b", "source_path": "app/nativeapp/routes.py", "source_ranges": ["1495-1553", "3549-3617"]},
+    {"path": "snapshots/backend/speech_alignment.py", "sha256": "788d92cdf14b3fd6acd98ff340a01f41ff03aa373b2075016817c6868eaf23a3", "source_path": "app/services/speech_alignment.py"},
+    {"path": "snapshots/backend/transcription.py", "sha256": "0779146d69f6407175131a94430aaa7c0731f623100185c31af42d6ebc7984e4", "source_path": "app/services/transcription.py"},
+    {"path": "snapshots/backend/tts.py", "sha256": "aa3f2c68b3982038c107a4d89f7179135e2b9e71c85416117d6e930b82a85114", "source_path": "app/services/tts.py"},
+    {"path": "snapshots/flutter/aligned_speech_text.dart", "sha256": "01dfa7332652b6ff052ee826730f5fef92e2b975b1065f52582ba55b7a207d0d", "source_path": "native/coach_app/lib/voice/aligned_speech_text.dart"},
+    {"path": "snapshots/flutter/api_client_speech.dart.inc", "sha256": "39ff595d6ef36898250605ea73b814e152b2426255304295e51dffaf1e6b9a68", "source_path": "native/coach_app/lib/api/api_client.dart", "source_ranges": ["872-906", "3883-3904"]},
+    {"path": "snapshots/flutter/assistant_speech_queue.dart", "sha256": "1e482dbd2b5b1e9bd769d74dd3ebdccc51c547c874c1ad7f43d4ec004ccae059", "source_path": "native/coach_app/lib/voice/assistant_speech_queue.dart"},
+    {"path": "snapshots/flutter/conversation_controller.dart", "sha256": "1b5c4ef7ac486e8ce74a9524265c1f5a9ff6d1b9cda9ac6e714d4e3b7577517f", "source_path": "native/coach_app/lib/voice/conversation_controller.dart"},
+    {"path": "snapshots/flutter/speech_clip.dart", "sha256": "3c39f50204da9183da322fd17bf2d7fa5b3d8ba1f83cc2b6dbd0ebe0f105c74e", "source_path": "native/coach_app/lib/voice/speech_clip.dart"},
+    {"path": "snapshots/flutter/teaching_screen.dart", "sha256": "01f063a1bbe160ad3ea47baa4fe511a7c84435f36c175f2397e82f927103e424", "source_path": "native/coach_app/lib/screens/teaching_screen.dart"},
+    {"path": "snapshots/flutter/voice_mode_screen.dart", "sha256": "2c2d3026e30c06261a74be4061859fbced4a4f77783b71eb0f32921abcb4547c", "source_path": "native/coach_app/lib/screens/voice_mode_screen.dart"},
+    {"path": "snapshots/tests/flutter/assistant_speech_queue_test.dart", "sha256": "eb2aaac93d933b584c467b1618e7ce55059f3b300bd7e1bdf219b08709e64ea6", "source_path": "native/coach_app/test/assistant_speech_queue_test.dart"},
+    {"path": "snapshots/tests/flutter/conversation_controller_test.dart", "sha256": "715b9f7b93b50a592239e375e47670b6e7d1d51132a34f184e45fb288082a5b9", "source_path": "native/coach_app/test/conversation_controller_test.dart"},
+    {"path": "snapshots/tests/flutter/voice_adapters_test.dart", "sha256": "d5768c03298e9406c86df5e1268a4a524b29878f2e2ee650ca83fb3bdfd3fe64", "source_path": "native/coach_app/test/voice_adapters_test.dart"},
+    {"path": "snapshots/tests/python/test_speech_alignment.py", "sha256": "1e7c281aa797260cce09155a94eaf408bfde57faa321f1ac0a59207b3ab83f18", "source_path": "tests/test_speech_alignment.py"},
+    {"path": "snapshots/tests/python/test_transcription.py", "sha256": "8adf78f75b588382a3b813b54279487a5bacb157e676f836f8c7580e8e2f9485", "source_path": "tests/test_transcription.py"},
+    {"path": "snapshots/tests/python/test_tts.py", "sha256": "5b3702546c942165a5a54c0306c90e703fa100729622249c52ccec960e6fa7a7", "source_path": "tests/test_tts.py"}
+  ],
+  "contracts": [
+    {"path": "contracts/assistant-speech-v1.openapi.json", "sha256": "944caeebfe4b4648b269a634f170503a4a0bf1c690ec6d1d2922d6306e74108d"},
+    {"path": "contracts/teaching-speech-events-v1.json", "sha256": "dd0cad56adbd8e103bbff20bc1a95c27900ce6a0554c93553f2fa304d12e4680"}
+  ]
+}
