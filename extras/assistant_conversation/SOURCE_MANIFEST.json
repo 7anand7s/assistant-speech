@@ -10,7 +10,7 @@
     {"path": "snapshots/backend/assistant_routes.py.inc", "sha256": "b89af8bb91fb0df594147812ca276fffcd32ca86425b8af6b818097c4c48137b", "source_path": "app/nativeapp/routes.py", "source_ranges": ["1495-1553", "3549-3617"]},
     {"path": "snapshots/backend/speech_alignment.py", "sha256": "788d92cdf14b3fd6acd98ff340a01f41ff03aa373b2075016817c6868eaf23a3", "source_path": "app/services/speech_alignment.py"},
     {"path": "snapshots/backend/transcription.py", "sha256": "0779146d69f6407175131a94430aaa7c0731f623100185c31af42d6ebc7984e4", "source_path": "app/services/transcription.py"},
-    {"path": "snapshots/backend/tts.py", "sha256": "aa3f2c68b3982038c107a4d89f7179135e2b9e71c85416117d6e930b82a85114", "source_path": "app/services/tts.py"},
+    {"path": "snapshots/backend/tts.py", "sha256": "8eb1935a6d1248e09e4cfbbf847995109be64c7ab082656e91ae5fa3026b00a0", "source_path": "app/services/tts.py"},
     {"path": "snapshots/flutter/aligned_speech_text.dart", "sha256": "01dfa7332652b6ff052ee826730f5fef92e2b975b1065f52582ba55b7a207d0d", "source_path": "native/coach_app/lib/voice/aligned_speech_text.dart"},
     {"path": "snapshots/flutter/api_client_speech.dart.inc", "sha256": "39ff595d6ef36898250605ea73b814e152b2426255304295e51dffaf1e6b9a68", "source_path": "native/coach_app/lib/api/api_client.dart", "source_ranges": ["872-906", "3883-3904"]},
     {"path": "snapshots/flutter/assistant_speech_queue.dart", "sha256": "1e482dbd2b5b1e9bd769d74dd3ebdccc51c547c874c1ad7f43d4ec004ccae059", "source_path": "native/coach_app/lib/voice/assistant_speech_queue.dart"},

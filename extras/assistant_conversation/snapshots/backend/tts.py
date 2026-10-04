@@ -1,7 +1,7 @@
 """Text-to-speech via the self-hosted kokoro-tts endpoint (voice replies).
 
 ``synthesize_speech(text)`` turns a bot reply into MP3 bytes by POSTing to the
-homelab's kokoro-tts container (``TTS_BASE_URL``, e.g. ``http://192.168.0.250:8880``
+homelab's kokoro-tts container (``TTS_BASE_URL``, e.g. ``http://<server-ip>:8880``
 — LAN/tailnet only, deliberately never Funnel-exposed). The webhook calls it
 from :func:`app.telegram.webhook._send_voice_notes`, strictly AFTER every text
 reply is delivered (post-ack, in a background task on the fast path), so the
