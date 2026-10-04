@@ -1,6 +1,6 @@
 # Self-Hosted Speech Endpoint — Connection Guide
 
-**Service:** `kokoro-tts` container on Unraid (`tower`) · **Port:** `8880` · **Auth:** none (private network only)
+**Service:** `kokoro-tts` container on Unraid (`your-server`) · **Port:** `8880` · **Auth:** none (private network only)
 
 Does two things: **TTS** (text → speech) and **STT** (speech → text). Both local, both on CPU.
 
@@ -8,18 +8,18 @@ Does two things: **TTS** (text → speech) and **STT** (speech → text). Both l
 
 | You are… | Base URL |
 |---|---|
-| On home WiFi (any device) | `http://192.168.0.250:8880` |
-| Anywhere else, device on your Tailscale tailnet | `http://100.91.190.65:8880` |
-| Same, with MagicDNS | `http://tower.fairy-fahrenheit.ts.net:8880` |
+| On home WiFi (any device) | `http://<server-ip>:8880` |
+| Anywhere else, device on your Tailscale tailnet | `http://<tailscale-ip>:8880` |
+| Same, with MagicDNS | `http://<your-machine>.<tailnet>.ts.net:8880` |
 
-- **Phones/laptops away from home:** install the Tailscale app, log into your tailnet, then use the `100.91.190.65` URL. Works on cellular.
+- **Phones/laptops away from home:** install the Tailscale app, log into your tailnet, then use the `<tailscale-ip>` URL. Works on cellular.
 - The endpoint is deliberately **not** on the public internet and has **no API key**. Don't add it to Tailscale Funnel.
 - It's plain `http`, not `https` — some clients warn about this; that's expected on a LAN/tailnet service.
 
 Quick reachability test from any machine:
 
 ```bash
-curl http://192.168.0.250:8880/health
+curl http://<server-ip>:8880/health
 ```
 
 Healthy response starts with `{"status":"ok", ...}`.
@@ -31,7 +31,7 @@ Healthy response starts with `{"status":"ok", ...}`.
 Send JSON, get an MP3 back.
 
 ```bash
-curl -X POST http://192.168.0.250:8880/tts \
+curl -X POST http://<server-ip>:8880/tts \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello there!", "voice": "af_bella", "speed": 1.1}' \
   -o speech.mp3
@@ -55,7 +55,7 @@ All fields (only `text` is required):
 Drop-in for anything that speaks the OpenAI TTS API (Open WebUI, many apps, iPhone Shortcuts).
 
 ```bash
-curl -X POST http://192.168.0.250:8880/v1/audio/speech \
+curl -X POST http://<server-ip>:8880/v1/audio/speech \
   -H "Content-Type: application/json" \
   -d '{"model": "tts-1", "input": "Hello!", "voice": "nova", "speed": 1.1}' \
   -o speech.mp3
@@ -68,16 +68,16 @@ curl -X POST http://192.168.0.250:8880/v1/audio/speech \
 ### `GET /voices` — list available voices
 
 ```bash
-curl "http://192.168.0.250:8880/voices?engine=kokoro&lang=en-us"
-curl "http://192.168.0.250:8880/voices?engine=edge&lang=en-US"
+curl "http://<server-ip>:8880/voices?engine=kokoro&lang=en-us"
+curl "http://<server-ip>:8880/voices?engine=edge&lang=en-US"
 ```
 
 ### `POST /stt` — speech to text (transcription)
 
-The reverse of `/tts`: upload an audio file, get English text back. Any format works (wav, mp3, m4a, ogg, flac…) — it's transcribed by Parakeet locally on CPU, fast (3–20× real-time).
+The reverse of `/tts`: upload an audio file, get English text back. Any format works (wav, mp3, m4a, ogg, flac…) — it's transcribed by Parakeet locally on CPU, comfortably faster than real-time (a ~7-second clip transcribes in ~2–3s here).
 
 ```bash
-curl -X POST http://192.168.0.250:8880/stt -F "file=@recording.m4a"
+curl -X POST http://<server-ip>:8880/stt -F "file=@recording.m4a"
 # -> {"text": "...", "duration_seconds": 11.0, "language": "en", "model": "parakeet-tdt-0.6b-v2"}
 ```
 
@@ -86,7 +86,7 @@ curl -X POST http://192.168.0.250:8880/stt -F "file=@recording.m4a"
 Drop-in for anything that speaks the OpenAI transcription API (Whisper clients, etc.). Multipart form upload:
 
 ```bash
-curl -X POST http://192.168.0.250:8880/v1/audio/transcriptions \
+curl -X POST http://<server-ip>:8880/v1/audio/transcriptions \
   -F "file=@recording.wav" -F "model=whisper-1"
 # -> {"text": "..."}     (add -F "response_format=text" for plain text)
 ```
@@ -109,7 +109,7 @@ Streaming sends audio as it's synthesized (sentence by sentence) instead of wait
 
 ```bash
 # stream ON — note curl's -N (no buffering)
-curl -N -X POST http://192.168.0.250:8880/tts \
+curl -N -X POST http://<server-ip>:8880/tts \
   -H "Content-Type: application/json" \
   -d '{"text": "First sentence. Second sentence. Third one.", "stream": true}' \
   -o speech.mp3
@@ -160,10 +160,14 @@ Before speaking, text passes a cleanup pipeline: markdown/emoji stripped, URLs r
 
 ## 7. Client recipes
 
+Two directions here: **Text → Speech** (play audio you generate) and **Speech → Text** (send a recording, get the words back). TTS recipes first (7A), then STT (7B), then a combined voice loop (7C).
+
+## 7A — Text → Speech
+
 ### iPhone — Shortcuts app
 
 1. Shortcuts → **+** → add action **"Get Contents of URL"**
-2. URL: `http://192.168.0.250:8880/v1/audio/speech` (WiFi) or the Tailscale URL (anywhere)
+2. URL: `http://<server-ip>:8880/v1/audio/speech` (WiFi) or the Tailscale URL (anywhere)
 3. Method **POST** · Header `Content-Type: application/json`
 4. Request Body → JSON:
    - `model` = `tts-1`
@@ -179,7 +183,7 @@ Before speaking, text passes a cleanup pipeline: markdown/emoji stripped, URLs r
 ### Any machine — curl
 
 ```bash
-curl -X POST http://192.168.0.250:8880/tts \
+curl -X POST http://<server-ip>:8880/tts \
   -H "Content-Type: application/json" \
   -d '{"text": "Test from the command line."}' \
   -o out.mp3 && open out.mp3    # 'open' on macOS, 'xdg-open' on Linux
@@ -188,7 +192,7 @@ curl -X POST http://192.168.0.250:8880/tts \
 ### Windows — PowerShell
 
 ```powershell
-Invoke-RestMethod -Uri http://192.168.0.250:8880/tts -Method Post `
+Invoke-RestMethod -Uri http://<server-ip>:8880/tts -Method Post `
   -ContentType "application/json" `
   -Body '{"text": "Hello from Windows."}' `
   -OutFile out.mp3
@@ -200,46 +204,31 @@ Start-Process out.mp3
 ```python
 import requests
 
-r = requests.post("http://192.168.0.250:8880/tts",
+r = requests.post("http://<server-ip>:8880/tts",
                   json={"text": "Hello from Python.", "voice": "af_heart"})
 open("out.mp3", "wb").write(r.content)
 print(r.headers["X-TTS-Engine"])
 
 # streaming variant — audio arrives sentence by sentence
-with requests.post("http://192.168.0.250:8880/tts",
+with requests.post("http://<server-ip>:8880/tts",
                    json={"text": "Long text here...", "stream": True},
                    stream=True) as r, open("out.mp3", "wb") as f:
     for chunk in r.iter_content(8192):
         f.write(chunk)
 ```
 
-Or use the OpenAI SDK directly:
+Or use the OpenAI SDK directly (TTS):
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://192.168.0.250:8880/v1", api_key="anything")
-
-# TTS
+client = OpenAI(base_url="http://<server-ip>:8880/v1", api_key="anything")
 client.audio.speech.create(model="tts-1", input="Hi!", voice="nova").write_to_file("out.mp3")
-
-# STT — transcribe an audio file
-with open("recording.mp3", "rb") as f:
-    print(client.audio.transcriptions.create(model="whisper-1", file=f).text)
-```
-
-Plain `requests` for STT:
-
-```python
-import requests
-with open("recording.mp3", "rb") as f:
-    r = requests.post("http://192.168.0.250:8880/stt", files={"file": f})
-print(r.json()["text"])
 ```
 
 ### JavaScript / Node
 
 ```javascript
-const res = await fetch("http://192.168.0.250:8880/tts", {
+const res = await fetch("http://<server-ip>:8880/tts", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ text: "Hello from Node." }),
@@ -247,17 +236,106 @@ const res = await fetch("http://192.168.0.250:8880/tts", {
 require("fs").writeFileSync("out.mp3", Buffer.from(await res.arrayBuffer()));
 ```
 
-### Open WebUI
+### Open WebUI — TTS
 
-Admin → Settings → Audio → TTS: engine **OpenAI**, API base `http://192.168.0.250:8880/v1`, any API key, voice e.g. `nova`.
+Admin → Settings → Audio → **TTS**: engine **OpenAI**, API base `http://<server-ip>:8880/v1`, any API key, voice e.g. `nova`. (The **STT** half of this same page is in 7B.)
 
-### Telegram-bot direction
+### Telegram bot — speak replies
 
-A bot (running anywhere on the LAN/tailnet) POSTs incoming message text to `/tts` and sends the MP3 back as a voice note. Shortcuts can't reliably trigger on incoming Telegram messages — that part belongs server-side.
+A bot (running in `your-client-host`) POSTs message text to `/tts` and sends the MP3 back as a voice note. Shortcuts can't reliably trigger on incoming Telegram messages — that direction belongs server-side.
+
+## 7B — Speech → Text
+
+The pattern is the same everywhere: send the audio as a **multipart form field named `file`** — to `/stt` (native JSON) or `/v1/audio/transcriptions` (OpenAI-shaped). Any container/codec works (ffmpeg decodes it); English only.
+
+### Any machine — curl
+
+```bash
+curl -X POST http://<server-ip>:8880/stt -F "file=@recording.m4a"
+# -> {"text":"...","duration_seconds":11.0,"language":"en","model":"parakeet-tdt-0.6b-v2"}
+```
+
+### iPhone — Shortcuts app (dictate / transcribe)
+
+1. Action **"Record Audio"** (tap to start, tap to stop) — or pick a Voice Memo / audio file instead.
+2. **"Get Contents of URL"**:
+   - URL `http://<server-ip>:8880/stt` (WiFi) or the Tailscale URL (anywhere)
+   - Method **POST**
+   - Request Body **Form**
+   - Add a field → type **File**, key `file`, value = the recorded audio (the previous action's output)
+3. **"Get Dictionary Value"** → key `text` from the response.
+4. Do something with it: **Copy to Clipboard**, **Show Result**, drop it into a Message, or pipe it straight into your TTS shortcut.
+- Trigger with "Hey Siri, *transcribe*", or from the **Share Sheet** (share a Voice Memo → transcribe it).
+
+### Android
+
+**HTTP Shortcuts** or **Tasker**: record audio to a file → HTTP **POST** multipart to `/stt`, field name `file` → read the JSON `text` value. In Tasker: *Get Voice* / a recording action → *HTTP Request* (multipart body) → parse `text`.
+
+### Open WebUI — voice input (mic button)
+
+Admin → Settings → Audio → **STT (Speech-to-Text)**: engine **OpenAI**, base URL `http://<server-ip>:8880/v1`, model `whisper-1`, any key. The mic button in the chat box now transcribes through your endpoint. It's the same settings page as the TTS half (7A) — point both directions at this one service.
+
+### Telegram bot — transcribe voice notes (server-side)
+
+The bot (in `your-client-host`) receives a `voice`/`audio` message, downloads it, POSTs to `/stt`, and replies with the transcript (or forwards the text to the LLM). With python-telegram-bot:
+
+```python
+import requests
+f = await context.bot.get_file(update.message.voice.file_id)
+audio = await f.download_as_bytearray()
+r = requests.post("http://<server-ip>:8880/stt",
+                  files={"file": ("voice.oga", bytes(audio))})
+await update.message.reply_text(r.json()["text"])
+```
+
+Use the host URL `http://<server-ip>:8880` from your-client-host — the TTS container is on a different docker network, so its container name won't resolve from there.
+
+### Python / Node
+
+```python
+# Python — native endpoint
+import requests
+with open("recording.mp3", "rb") as f:
+    print(requests.post("http://<server-ip>:8880/stt", files={"file": f}).json()["text"])
+
+# Python — OpenAI SDK
+from openai import OpenAI
+client = OpenAI(base_url="http://<server-ip>:8880/v1", api_key="anything")
+with open("recording.mp3", "rb") as f:
+    print(client.audio.transcriptions.create(model="whisper-1", file=f).text)
+```
+
+```javascript
+// Node 18+ (global fetch/FormData/Blob)
+import { readFileSync } from "fs";
+const fd = new FormData();
+fd.append("file", new Blob([readFileSync("recording.m4a")]), "recording.m4a");
+const r = await fetch("http://<server-ip>:8880/stt", { method: "POST", body: fd });
+console.log((await r.json()).text);
+```
+
+### Home Assistant / any Whisper client
+
+Anything that speaks the OpenAI `/v1/audio/transcriptions` API points at base URL `http://<server-ip>:8880/v1` (model `whisper-1`, any key) for fully local transcription — no cloud, no per-minute cost.
+
+## 7C — Full voice loop (STT → LLM → TTS)
+
+You already have every piece: this endpoint (STT + TTS) plus Ollama on `:11434`. Record → transcribe → ask the LLM → speak the answer:
+
+```bash
+BASE=http://<server-ip>:8880
+OLLAMA=http://<server-ip>:11434
+
+text=$(curl -s -X POST $BASE/stt -F "file=@question.m4a" | grep -o '"text":"[^"]*"' | cut -d'"' -f4)
+reply=$(curl -s $OLLAMA/api/generate -d "{\"model\":\"llama3.2:3b\",\"prompt\":\"$text\",\"stream\":false}" | grep -o '"response":"[^"]*"' | cut -d'"' -f4)
+curl -s -X POST $BASE/tts -H "Content-Type: application/json" -d "{\"text\":\"$reply\"}" -o answer.mp3
+```
+
+On iPhone, chain three actions in one Shortcut: the STT recipe (7B) → an HTTP call to Ollama (or your bot) → the TTS recipe (7A). That's a private, offline voice assistant.
 
 ## 8. Operating the service (on the Unraid box)
 
-All from this folder (`/mnt/user/ML/TTS`):
+All from this folder (`<repo-dir>`):
 
 ```bash
 docker compose up -d            # start / apply compose changes

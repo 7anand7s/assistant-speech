@@ -15,7 +15,7 @@ does not change the deployed API, models, latency, residency, or Assistant.
 ## Provenance
 
 - Source repository: `https://github.com/7anand7s/personel-coach.git`
-- Source checkout: `/workspace/personel-coach`
+- Source checkout: `<source-checkout>`
 - Source commit: `de8eadaf0c93ea17e0f1106d9aca45ca0a269e11`
 - Product: Assistant native app `0.43.2+87`
 - Snapshot manifest: [`SOURCE_MANIFEST.json`](SOURCE_MANIFEST.json)

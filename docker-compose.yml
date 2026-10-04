@@ -13,6 +13,13 @@ services:
       # Whole service stays off the GPU (see README - this is deliberate)
       - ONNX_PROVIDER=CPUExecutionProvider
       - OLLAMA_FORCE_CPU=1
+      # HYG-16 (2026-09-24): no model-based normalisation. Stage 1 (regex:
+      # markdown/emoji/URLs) stays on; the Ollama step shared qwen2.5:1.5b with
+      # Coach input grounding at a different context size, forcing constant
+      # reloads that made grounding time out. Empty = no models, no warm-up.
+      # start.sh's ${VAR:-default} re-applies the qwen2.5/gemma3 defaults on a bare-metal start.
+      - NORM_LLM_PRIMARY=
+      - NORM_LLM_SECONDARY=
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
